@@ -19,7 +19,7 @@ export default function CassaPage() {
   const [ricevuta, setRicevuta] = useState<any>(null)
   const [sconto, setSconto] = useState('')
 
-  const categorie = ['Tutti', ...new Set(prodottiCassa.map(p => p.categoria))]
+  const categorie: string[] = ["Tutti", ...new Set(prodottiCassa.map(p => p.categoria))]
   const prodottiFiltrati = prodottiCassa.filter(p => {
     const matchCat = categoria === 'Tutti' || p.categoria === categoria
     const matchCerca = p.nome.toLowerCase().includes(cerca.toLowerCase())
