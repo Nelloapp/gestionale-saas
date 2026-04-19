@@ -52,7 +52,7 @@ export default function MagazzinoPage() {
   }
 
   const stockColor = (q: number, m: number) => q === 0 ? '#ef4444' : q < m ? '#f59e0b' : '#22c55e'
-  const articoliUnici = [...new Set(stock.map(s => s.articolo))]
+  const articoliUnici = stock.map(s => s.articolo).filter((v, i, a) => a.indexOf(v) === i)
 
   return (
     <div style={{fontFamily:'system-ui'}}>
