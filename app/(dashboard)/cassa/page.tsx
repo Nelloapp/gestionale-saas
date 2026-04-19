@@ -10,6 +10,8 @@ const prodottiCassa = [
   { id:6, nome:'Cappello', prezzo:19.90, categoria:'Abbigliamento' },
 ]
 
+const categorieLista = ['Tutti', 'Abbigliamento', 'Calzature', 'Accessori']
+
 export default function CassaPage() {
   const [carrello, setCarrello] = useState<any[]>([])
   const [categoria, setCategoria] = useState('Tutti')
@@ -19,7 +21,6 @@ export default function CassaPage() {
   const [ricevuta, setRicevuta] = useState<any>(null)
   const [sconto, setSconto] = useState('')
 
-  const categorie: string[] = ["Tutti", ...new Set(prodottiCassa.map(p => p.categoria))]
   const prodottiFiltrati = prodottiCassa.filter(p => {
     const matchCat = categoria === 'Tutti' || p.categoria === categoria
     const matchCerca = p.nome.toLowerCase().includes(cerca.toLowerCase())
@@ -88,33 +89,25 @@ export default function CassaPage() {
   return (
     <div style={{fontFamily:'system-ui'}}>
       <h1 style={{fontSize:'24px',fontWeight:'700',color:'#0f172a',marginBottom:'20px'}}>🖥️ Cassa</h1>
-
-      {/* Cerca */}
-      <input value={cerca} onChange={e=>setCerca(e.target.value)} placeholder="🔍 Cerca prodotto o scannerizza barcode..."
+      <input value={cerca} onChange={e=>setCerca(e.target.value)} placeholder="🔍 Cerca prodotto..."
         style={{width:'100%',border:'1px solid #e2e8f0',borderRadius:'8px',padding:'10px 12px',fontSize:'14px',marginBottom:'12px',background:'white',outline:'none'}}/>
-
-      {/* Categorie */}
       <div style={{display:'flex',gap:'8px',marginBottom:'16px',overflowX:'auto',paddingBottom:'4px'}}>
-        {categorie.map(c => (
+        {categorieLista.map(c => (
           <button key={c} onClick={()=>setCategoria(c)}
             style={{background:categoria===c?'#1e293b':'white',color:categoria===c?'white':'#64748b',border:'1px solid #e2e8f0',borderRadius:'99px',padding:'6px 14px',fontSize:'13px',cursor:'pointer',whiteSpace:'nowrap',fontWeight:categoria===c?'600':'400'}}>
             {c}
           </button>
         ))}
       </div>
-
-      {/* Prodotti */}
       <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'10px',marginBottom:'20px'}}>
         {prodottiFiltrati.map(p => (
           <button key={p.id} onClick={()=>aggiungi(p)}
-            style={{background:'white',border:'1px solid #e2e8f0',borderRadius:'12px',padding:'16px',cursor:'pointer',textAlign:'left',transition:'all 0.2s'}}>
+            style={{background:'white',border:'1px solid #e2e8f0',borderRadius:'12px',padding:'16px',cursor:'pointer',textAlign:'left'}}>
             <p style={{fontWeight:'600',color:'#0f172a',fontSize:'14px',marginBottom:'4px'}}>{p.nome}</p>
             <p style={{color:'#3b82f6',fontWeight:'700',fontSize:'18px'}}>€{p.prezzo.toFixed(2)}</p>
           </button>
         ))}
       </div>
-
-      {/* Carrello */}
       {carrello.length > 0 && (
         <div style={{background:'white',borderRadius:'12px',padding:'16px',boxShadow:'0 1px 4px rgba(0,0,0,0.06)',marginBottom:'16px'}}>
           <h3 style={{fontSize:'16px',fontWeight:'700',marginBottom:'12px'}}>🛒 Carrello</h3>
@@ -130,7 +123,6 @@ export default function CassaPage() {
               </div>
             </div>
           ))}
-
           <div style={{marginTop:'12px'}}>
             <div style={{display:'flex',gap:'8px',marginBottom:'8px',alignItems:'center'}}>
               <label style={{fontSize:'13px',color:'#64748b',minWidth:'60px'}}>Sconto €</label>
@@ -146,8 +138,6 @@ export default function CassaPage() {
               <p style={{fontWeight:'700',fontSize:'18px',color:'#3b82f6'}}>€{totale.toFixed(2)}</p>
             </div>
           </div>
-
-          {/* Metodi pagamento */}
           <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'8px',marginTop:'12px'}}>
             {['Contanti','Carta','Satispay','Altro'].map(m => (
               <button key={m} onClick={()=>setPagamento(m)}
@@ -156,7 +146,6 @@ export default function CassaPage() {
               </button>
             ))}
           </div>
-
           {pagamento === 'Contanti' && (
             <div style={{marginTop:'12px'}}>
               <input type="number" placeholder="Importo ricevuto" value={contanti} onChange={e=>setContanti(e.target.value)}
@@ -164,7 +153,6 @@ export default function CassaPage() {
               {parseFloat(contanti) >= totale && <p style={{color:'#22c55e',fontWeight:'700',fontSize:'16px',textAlign:'center'}}>Resto: €{resto.toFixed(2)}</p>}
             </div>
           )}
-
           <button onClick={completaVendita} disabled={!pagamento}
             style={{width:'100%',background: pagamento?'#22c55e':'#e2e8f0',color: pagamento?'white':'#94a3b8',border:'none',borderRadius:'8px',padding:'14px',fontSize:'16px',fontWeight:'700',cursor:pagamento?'pointer':'not-allowed',marginTop:'12px'}}>
             ✅ Completa Vendita
