@@ -2,417 +2,327 @@
 import { useState, useEffect } from 'react'
 import { supabase, supabaseAdmin } from '../../../lib/supabase'
 
-
-type Articolo = {
-  id?: string; codice: string; ean: string; codice_fornitore: string; nome: string;
-  descrizione: string; categoria: string; sottocategoria: string; um: string;
-  costo: number; ricarica: number; prezzo_base: number; prezzo_premium: number;
-  prezzo_rivenditori: number; iva: number; stock: number; stock_minimo: number;
-  stock_massimo: number; ubicazione: string; fornitore: string; tempo_riordino: number;
-  peso: number; dimensioni: string; stato: string; note: string;
-}
-
-const emptyForm: Articolo = {
-  codice: '', ean: '', codice_fornitore: '', nome: '', descrizione: '',
-  categoria: '', sottocategoria: '', um: 'pz', costo: 0, ricarica: 0,
-  prezzo_base: 0, prezzo_premium: 0, prezzo_rivenditori: 0, iva: 22,
-  stock: 0, stock_minimo: 0, stock_massimo: 0, ubicazione: '', fornitore: '',
-  tempo_riordino: 0, peso: 0, dimensioni: '', stato: 'attivo', note: ''
-}
+const USER_ID = 'f1e0512f-0ecd-41b5-a29a-33fc9f832528'
+const inp = (extra?: any): any => ({ width: '100%', border: '1px solid #e2e8f0', borderRadius: 8, padding: '8px 12px', fontSize: 14, outline: 'none', boxSizing: 'border-box', background: '#fff', ...extra })
+const btn = (bg: string, extra?: any): any => ({ background: bg, color: '#fff', border: 'none', borderRadius: 8, padding: '8px 18px', cursor: 'pointer', fontWeight: 600, fontSize: 14, ...extra })
+const emptyForm = { nome: '', codice: '', ean: '', categoria_id: '', prezzo: 0, prezzo_ingrosso: 0, prezzo_promo: 0, prezzo_vip: 0, iva: 22, um: 'Pz', stock: 0, descrizione: '', attivo: true }
 
 export default function ArticoliPage() {
   const [articoli, setArticoli] = useState<any[]>([])
+  const [categorie, setCategorie] = useState<any[]>([])
+  const [colori, setColori] = useState<any[]>([])
+  const [misure, setMisure] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
-  const [showForm, setShowForm] = useState(false)
-  const [editId, setEditId] = useState<string | null>(null)
-  const [form, setForm] = useState<Articolo>(emptyForm)
-  const [tabForm, setTabForm] = useState('dati')
-  const [filtroStato, setFiltroStato] = useState('tutti')
-  const [cerca, setCerca] = useState('')
-  const [saving, setSaving] = useState(false)
+  const [view, setView] = useState<'lista'|'form'|'varianti'|'tabelle'>('lista')
+  const [form, setForm] = useState({...emptyForm})
+  const [editId, setEditId] = useState<string|null>(null)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [cerca, setCerca] = useState('')
+  const [filtroCat, setFiltroCat] = useState('tutti')
+  const [articoloVarianti, setArticoloVarianti] = useState<any>(null)
+  const [varianti, setVarianti] = useState<any[]>([])
+  const [tab, setTab] = useState<'info'|'listini'>('info')
+  const [tabTabelle, setTabTabelle] = useState<'colori'|'misure'|'categorie'>('colori')
+  const [nuovoColore, setNuovoColore] = useState({ nome: '', codice_hex: '#000000' })
+  const [nuovaMisura, setNuovaMisura] = useState({ nome: '', categoria: 'taglia', ordine: 0 })
+  const [nuovaCategoria, setNuovaCategoria] = useState({ nome: '', descrizione: '' })
+  const [varianteForm, setVarianteForm] = useState({ colore_id: '', misura_id: '', ean: '', codice_variante: '', prezzo_override: '', stock: 0 })
 
-  useEffect(() => { loadArticoli() }, [])
+  useEffect(() => { loadAll() }, [])
 
-  async function loadArticoli() {
+  async function loadAll() {
     setLoading(true)
-    const { data, error } = await supabaseAdmin.from('articoli').select('*').order('created_at', { ascending: false })
-    if (error) setError('Errore caricamento: ' + error.message)
-    else setArticoli(data || [])
+    const [{ data: arts }, { data: cats }, { data: cols }, { data: mis }] = await Promise.all([
+      supabaseAdmin.from('articoli').select('*, categorie_prodotto(nome)').order('nome'),
+      supabaseAdmin.from('categorie_prodotto').select('*').order('nome'),
+      supabaseAdmin.from('colori').select('*').order('nome'),
+      supabaseAdmin.from('misure').select('*').order('ordine, nome'),
+    ])
+    setArticoli(arts || [])
+    setCategorie(cats || [])
+    setColori(cols || [])
+    setMisure(mis || [])
     setLoading(false)
   }
 
-  function calcolaPrezzi(costo: number, ricarica: number) {
-    const base = costo * (1 + ricarica / 100)
-    return {
-      prezzo_base: Math.round(base * 100) / 100,
-      prezzo_premium: Math.round(base * 1.15 * 100) / 100,
-      prezzo_rivenditori: Math.round(base * 0.85 * 100) / 100,
-    }
-  }
-
-  function handleCostoRicarica(field: 'costo' | 'ricarica', value: number) {
-    const costo = field === 'costo' ? value : form.costo
-    const ricarica = field === 'ricarica' ? value : form.ricarica
-    const prezzi = calcolaPrezzi(costo, ricarica)
-    setForm({ ...form, [field]: value, ...prezzi })
-  }
-
   async function salvaArticolo() {
-    if (!form.nome.trim()) { setError('Il nome è obbligatorio'); return }
-    if (!form.codice.trim()) { setError('Il codice è obbligatorio'); return }
+    if (!form.nome.trim()) { setError('Il nome e obbligatorio'); return }
     setSaving(true); setError(''); setSuccess('')
     const { data: { user } } = await supabase.auth.getUser()
-    const payload = { ...form, user_id: user?.id || 'f1e0512f-0ecd-41b5-a29a-33fc9f832528' }
-    let result
-    if (editId) {
-      result = await supabaseAdmin.from('articoli').update(payload).eq('id', editId)
-    } else {
-      result = await supabaseAdmin.from('articoli').insert([payload])
-    }
-    if (result.error) { setError('Errore salvataggio: ' + result.error.message) }
-    else { setSuccess(editId ? 'Articolo aggiornato!' : 'Articolo salvato!'); setShowForm(false); setForm(emptyForm); setEditId(null); loadArticoli() }
+    const payload = { ...form, user_id: user?.id || USER_ID, prezzo: Number(form.prezzo)||0, prezzo_ingrosso: Number(form.prezzo_ingrosso)||0, prezzo_promo: Number(form.prezzo_promo)||0, prezzo_vip: Number(form.prezzo_vip)||0, iva: Number(form.iva)||22, stock: Number(form.stock)||0, categoria_id: form.categoria_id||null, ean: form.ean||null, codice: form.codice||null }
+    const result = editId ? await supabaseAdmin.from('articoli').update(payload).eq('id', editId) : await supabaseAdmin.from('articoli').insert([payload])
+    if (result.error) { setError('Errore: ' + result.error.message) }
+    else { setSuccess(editId ? 'Articolo aggiornato!' : 'Articolo salvato!'); setView('lista'); setForm({...emptyForm}); setEditId(null); loadAll() }
     setSaving(false)
   }
 
   async function eliminaArticolo(id: string) {
     if (!confirm('Eliminare questo articolo?')) return
     const { error } = await supabaseAdmin.from('articoli').delete().eq('id', id)
-    if (error) setError('Errore eliminazione: ' + error.message)
-    else { setSuccess('Articolo eliminato'); loadArticoli() }
+    if (error) setError('Errore: ' + error.message)
+    else { setSuccess('Eliminato'); loadAll() }
   }
 
-  function apriModifica(a: any) {
-    setForm({ ...a }); setEditId(a.id); setTabForm('dati'); setShowForm(true)
+  async function apriVarianti(art: any) {
+    setArticoloVarianti(art)
+    const { data } = await supabaseAdmin.from('varianti_articolo').select('*, colori(nome, codice_hex), misure(nome)').eq('articolo_id', art.id).order('created_at')
+    setVarianti(data || [])
+    setVarianteForm({ colore_id: '', misura_id: '', ean: '', codice_variante: '', prezzo_override: '', stock: 0 })
+    setView('varianti')
   }
 
-  const articoliFiltrati = articoli.filter(a => {
-    const matchStato = filtroStato === 'tutti' || a.stato === filtroStato
+  async function salvaVariante() {
+    if (!varianteForm.colore_id && !varianteForm.misura_id) { setError('Seleziona almeno colore o misura'); return }
+    setSaving(true); setError('')
+    const colore = colori.find(c => c.id === varianteForm.colore_id)
+    const misura = misure.find(m => m.id === varianteForm.misura_id)
+    const payload = { articolo_id: articoloVarianti.id, colore_id: varianteForm.colore_id||null, misura_id: varianteForm.misura_id||null, colore_nome: colore?.nome||null, misura_nome: misura?.nome||null, ean: varianteForm.ean||null, codice_variante: varianteForm.codice_variante||null, prezzo_override: varianteForm.prezzo_override ? Number(varianteForm.prezzo_override) : null, stock: Number(varianteForm.stock)||0 }
+    const { error } = await supabaseAdmin.from('varianti_articolo').insert([payload])
+    if (error) { setError('Errore: ' + error.message) }
+    else { setSuccess('Variante aggiunta!'); setVarianteForm({ colore_id: '', misura_id: '', ean: '', codice_variante: '', prezzo_override: '', stock: 0 }); apriVarianti(articoloVarianti) }
+    setSaving(false)
+  }
+
+  async function eliminaVariante(id: string) {
+    if (!confirm('Eliminare?')) return
+    await supabaseAdmin.from('varianti_articolo').delete().eq('id', id)
+    apriVarianti(articoloVarianti)
+  }
+
+  async function salvaColore() {
+    if (!nuovoColore.nome.trim()) return
+    const { error } = await supabaseAdmin.from('colori').insert([nuovoColore])
+    if (!error) { setNuovoColore({ nome: '', codice_hex: '#000000' }); loadAll(); setSuccess('Colore aggiunto!') } else setError(error.message)
+  }
+  async function salvaMisura() {
+    if (!nuovaMisura.nome.trim()) return
+    const { error } = await supabaseAdmin.from('misure').insert([{ ...nuovaMisura, ordine: Number(nuovaMisura.ordine) }])
+    if (!error) { setNuovaMisura({ nome: '', categoria: 'taglia', ordine: 0 }); loadAll(); setSuccess('Misura aggiunta!') } else setError(error.message)
+  }
+  async function salvaCategoria() {
+    if (!nuovaCategoria.nome.trim()) return
+    const { error } = await supabaseAdmin.from('categorie_prodotto').insert([nuovaCategoria])
+    if (!error) { setNuovaCategoria({ nome: '', descrizione: '' }); loadAll(); setSuccess('Categoria aggiunta!') } else setError(error.message)
+  }
+
+  const artFiltrati = articoli.filter(a => {
+    const matchCat = filtroCat === 'tutti' || a.categoria_id === filtroCat
     const matchCerca = !cerca || a.nome?.toLowerCase().includes(cerca.toLowerCase()) || a.codice?.toLowerCase().includes(cerca.toLowerCase()) || a.ean?.includes(cerca)
-    return matchStato && matchCerca
+    return matchCat && matchCerca
   })
 
-  const kpi = {
-    totale: articoli.length,
-    attivi: articoli.filter(a => a.stato === 'attivo').length,
-    sottoScorta: articoli.filter(a => a.stock <= a.stock_minimo && a.stock_minimo > 0).length,
-    valoreStock: articoli.reduce((s, a) => s + (a.stock * a.prezzo_base), 0),
-  }
+  const Err = () => error ? <div style={{background:'#fee2e2',color:'#991b1b',padding:12,borderRadius:8,marginBottom:12}}>{error} <button onClick={()=>setError('')} style={{background:'none',border:'none',cursor:'pointer',float:'right'}}>x</button></div> : null
+  const Suc = () => success ? <div style={{background:'#d1fae5',color:'#065f46',padding:12,borderRadius:8,marginBottom:12}}>{success}</div> : null
 
-  const tabs = [
-    { id: 'dati', label: '📦 Dati' },
-    { id: 'prezzi', label: '💰 Prezzi' },
-    { id: 'magazzino', label: '🏭 Magazzino' },
-  ]
+  if (view === 'tabelle') return (
+    <div style={{padding:24,maxWidth:900,margin:'0 auto'}}>
+      <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:24}}>
+        <button onClick={()=>setView('lista')} style={btn('#64748b')}>Indietro</button>
+        <h1 style={{margin:0,fontSize:22,fontWeight:700}}>Tabelle di Base</h1>
+      </div>
+      <Err/><Suc/>
+      <div style={{display:'flex',gap:8,marginBottom:20}}>
+        {(['colori','misure','categorie'] as const).map(t=>(
+          <button key={t} onClick={()=>setTabTabelle(t)} style={{...btn(tabTabelle===t?'#3b82f6':'#e2e8f0'),color:tabTabelle===t?'#fff':'#374151',textTransform:'capitalize'}}>{t}</button>
+        ))}
+      </div>
+      {tabTabelle==='colori' && (
+        <div>
+          <div style={{background:'#fff',borderRadius:12,padding:20,boxShadow:'0 2px 8px rgba(0,0,0,0.06)',marginBottom:20}}>
+            <h3 style={{margin:'0 0 12px',fontSize:16}}>Aggiungi Colore</h3>
+            <div style={{display:'flex',gap:10,alignItems:'flex-end',flexWrap:'wrap'}}>
+              <div style={{flex:1,minWidth:150}}><label style={{fontSize:12,color:'#64748b'}}>Nome colore</label><input style={inp()} value={nuovoColore.nome} onChange={e=>setNuovoColore(p=>({...p,nome:e.target.value}))} placeholder="es. Azzurro cielo"/></div>
+              <div><label style={{fontSize:12,color:'#64748b'}}>Colore</label><input type="color" value={nuovoColore.codice_hex} onChange={e=>setNuovoColore(p=>({...p,codice_hex:e.target.value}))} style={{width:50,height:38,border:'1px solid #e2e8f0',borderRadius:8,cursor:'pointer'}}/></div>
+              <button onClick={salvaColore} style={btn('#10b981')}>+ Aggiungi</button>
+            </div>
+          </div>
+          <div style={{display:'flex',flexWrap:'wrap',gap:10}}>
+            {colori.map(c=>(
+              <div key={c.id} style={{display:'flex',alignItems:'center',gap:8,background:'#fff',borderRadius:8,padding:'8px 14px',boxShadow:'0 1px 4px rgba(0,0,0,0.06)'}}>
+                <div style={{width:20,height:20,borderRadius:4,background:c.codice_hex,border:'1px solid #e2e8f0'}}/>
+                <span style={{fontSize:14,fontWeight:500}}>{c.nome}</span>
+                <button onClick={async()=>{await supabaseAdmin.from('colori').delete().eq('id',c.id);loadAll()}} style={{background:'none',border:'none',cursor:'pointer',color:'#ef4444',fontSize:16}}>x</button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {tabTabelle==='misure' && (
+        <div>
+          <div style={{background:'#fff',borderRadius:12,padding:20,boxShadow:'0 2px 8px rgba(0,0,0,0.06)',marginBottom:20}}>
+            <h3 style={{margin:'0 0 12px',fontSize:16}}>Aggiungi Misura/Taglia</h3>
+            <div style={{display:'flex',gap:10,alignItems:'flex-end',flexWrap:'wrap'}}>
+              <div style={{flex:1,minWidth:100}}><label style={{fontSize:12,color:'#64748b'}}>Nome</label><input style={inp()} value={nuovaMisura.nome} onChange={e=>setNuovaMisura(p=>({...p,nome:e.target.value}))} placeholder="es. 42 oppure XL"/></div>
+              <div style={{minWidth:120}}><label style={{fontSize:12,color:'#64748b'}}>Categoria</label><select style={inp()} value={nuovaMisura.categoria} onChange={e=>setNuovaMisura(p=>({...p,categoria:e.target.value}))}><option value="taglia">Taglia (S/M/L)</option><option value="numero">Numero (38/40)</option><option value="misura">Misura (cm)</option><option value="unico">Unico</option></select></div>
+              <div style={{width:80}}><label style={{fontSize:12,color:'#64748b'}}>Ordine</label><input type="number" style={inp()} value={nuovaMisura.ordine} onChange={e=>setNuovaMisura(p=>({...p,ordine:Number(e.target.value)}))}/></div>
+              <button onClick={salvaMisura} style={btn('#10b981')}>+ Aggiungi</button>
+            </div>
+          </div>
+          <div style={{display:'flex',flexWrap:'wrap',gap:8}}>
+            {misure.map(m=>(
+              <div key={m.id} style={{display:'flex',alignItems:'center',gap:8,background:'#fff',borderRadius:8,padding:'8px 14px',boxShadow:'0 1px 4px rgba(0,0,0,0.06)'}}>
+                <span style={{fontSize:13,color:'#64748b'}}>{m.categoria}</span>
+                <span style={{fontSize:14,fontWeight:600}}>{m.nome}</span>
+                <button onClick={async()=>{await supabaseAdmin.from('misure').delete().eq('id',m.id);loadAll()}} style={{background:'none',border:'none',cursor:'pointer',color:'#ef4444',fontSize:16}}>x</button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {tabTabelle==='categorie' && (
+        <div>
+          <div style={{background:'#fff',borderRadius:12,padding:20,boxShadow:'0 2px 8px rgba(0,0,0,0.06)',marginBottom:20}}>
+            <h3 style={{margin:'0 0 12px',fontSize:16}}>Aggiungi Categoria Prodotto</h3>
+            <div style={{display:'flex',gap:10,alignItems:'flex-end',flexWrap:'wrap'}}>
+              <div style={{flex:1,minWidth:150}}><label style={{fontSize:12,color:'#64748b'}}>Nome categoria</label><input style={inp()} value={nuovaCategoria.nome} onChange={e=>setNuovaCategoria(p=>({...p,nome:e.target.value}))} placeholder="es. Lenzuola"/></div>
+              <div style={{flex:2,minWidth:200}}><label style={{fontSize:12,color:'#64748b'}}>Descrizione</label><input style={inp()} value={nuovaCategoria.descrizione} onChange={e=>setNuovaCategoria(p=>({...p,descrizione:e.target.value}))} placeholder="Descrizione opzionale"/></div>
+              <button onClick={salvaCategoria} style={btn('#10b981')}>+ Aggiungi</button>
+            </div>
+          </div>
+          <div style={{display:'flex',flexWrap:'wrap',gap:8}}>
+            {categorie.map(c=>(
+              <div key={c.id} style={{display:'flex',alignItems:'center',gap:8,background:'#fff',borderRadius:8,padding:'8px 14px',boxShadow:'0 1px 4px rgba(0,0,0,0.06)'}}>
+                <span style={{fontSize:14,fontWeight:600}}>{c.nome}</span>
+                <button onClick={async()=>{await supabaseAdmin.from('categorie_prodotto').delete().eq('id',c.id);loadAll()}} style={{background:'none',border:'none',cursor:'pointer',color:'#ef4444',fontSize:16}}>x</button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
 
-  const inp = (style?: any) => ({ width: '100%', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '10px 12px', fontSize: '14px', outline: 'none', boxSizing: 'border-box' as const, ...style })
-  const lbl = { display: 'block', marginBottom: '4px', fontWeight: '600', fontSize: '13px', color: '#374151' }
-  const sel = { ...inp(), background: 'white' }
+  if (view === 'varianti') return (
+    <div style={{padding:24,maxWidth:1000,margin:'0 auto'}}>
+      <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:24}}>
+        <button onClick={()=>setView('lista')} style={btn('#64748b')}>Indietro</button>
+        <div>
+          <h1 style={{margin:0,fontSize:20,fontWeight:700}}>Varianti: {articoloVarianti?.nome}</h1>
+          <p style={{margin:0,fontSize:13,color:'#64748b'}}>Prezzo base: euro{Number(articoloVarianti?.prezzo||0).toFixed(2)} - Codice: {articoloVarianti?.codice||'--'}</p>
+        </div>
+      </div>
+      <Err/><Suc/>
+      <div style={{background:'#fff',borderRadius:12,padding:20,boxShadow:'0 2px 8px rgba(0,0,0,0.06)',marginBottom:24}}>
+        <h3 style={{margin:'0 0 16px',fontSize:16}}>+ Aggiungi Variante</h3>
+        <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit, minmax(150px, 1fr))',gap:12}}>
+          <div><label style={{fontSize:12,color:'#64748b',display:'block',marginBottom:4}}>Colore</label><select style={inp()} value={varianteForm.colore_id} onChange={e=>setVarianteForm(p=>({...p,colore_id:e.target.value}))}><option value="">-- Nessuno --</option>{colori.map(c=><option key={c.id} value={c.id}>{c.nome}</option>)}</select></div>
+          <div><label style={{fontSize:12,color:'#64748b',display:'block',marginBottom:4}}>Misura/Taglia</label><select style={inp()} value={varianteForm.misura_id} onChange={e=>setVarianteForm(p=>({...p,misura_id:e.target.value}))}><option value="">-- Nessuna --</option>{misure.map(m=><option key={m.id} value={m.id}>{m.nome} ({m.categoria})</option>)}</select></div>
+          <div><label style={{fontSize:12,color:'#64748b',display:'block',marginBottom:4}}>EAN / Barcode</label><input style={inp()} value={varianteForm.ean} onChange={e=>setVarianteForm(p=>({...p,ean:e.target.value}))} placeholder="Scansiona o digita EAN"/></div>
+          <div><label style={{fontSize:12,color:'#64748b',display:'block',marginBottom:4}}>Codice Variante</label><input style={inp()} value={varianteForm.codice_variante} onChange={e=>setVarianteForm(p=>({...p,codice_variante:e.target.value}))} placeholder="es. ART001-BLU-M"/></div>
+          <div><label style={{fontSize:12,color:'#64748b',display:'block',marginBottom:4}}>Prezzo (opz.)</label><input type="number" step="0.01" style={inp()} value={varianteForm.prezzo_override} onChange={e=>setVarianteForm(p=>({...p,prezzo_override:e.target.value}))} placeholder={"Base: euro"+articoloVarianti?.prezzo}/></div>
+          <div><label style={{fontSize:12,color:'#64748b',display:'block',marginBottom:4}}>Stock</label><input type="number" style={inp()} value={varianteForm.stock} onChange={e=>setVarianteForm(p=>({...p,stock:Number(e.target.value)}))}/></div>
+        </div>
+        <div style={{marginTop:16}}><button onClick={salvaVariante} disabled={saving} style={btn('#10b981',{padding:'10px 28px'})}>{saving?'Salvataggio...':'+ Aggiungi Variante'}</button></div>
+      </div>
+      <div style={{background:'#fff',borderRadius:12,boxShadow:'0 2px 8px rgba(0,0,0,0.06)',overflow:'hidden'}}>
+        <table style={{width:'100%',borderCollapse:'collapse'}}>
+          <thead><tr style={{background:'#f8fafc'}}>{['Colore','Misura','EAN','Codice','Prezzo','Stock','Azioni'].map(h=><th key={h} style={{padding:'12px 14px',textAlign:'left',fontSize:12,fontWeight:600,color:'#64748b',borderBottom:'1px solid #e2e8f0'}}>{h}</th>)}</tr></thead>
+          <tbody>
+            {varianti.length===0?<tr><td colSpan={7} style={{padding:30,textAlign:'center',color:'#94a3b8'}}>Nessuna variante. Aggiungine una sopra.</td></tr>:varianti.map(v=>(
+              <tr key={v.id} style={{borderBottom:'1px solid #f1f5f9'}}>
+                <td style={{padding:'10px 14px'}}><div style={{display:'flex',alignItems:'center',gap:8}}>{v.colori?.codice_hex&&<div style={{width:16,height:16,borderRadius:3,background:v.colori.codice_hex,border:'1px solid #e2e8f0'}}/>}<span style={{fontSize:14}}>{v.colore_nome||'--'}</span></div></td>
+                <td style={{padding:'10px 14px',fontSize:14}}>{v.misura_nome||'--'}</td>
+                <td style={{padding:'10px 14px',fontSize:13,fontFamily:'monospace'}}>{v.ean||'--'}</td>
+                <td style={{padding:'10px 14px',fontSize:13}}>{v.codice_variante||'--'}</td>
+                <td style={{padding:'10px 14px',fontSize:14,fontWeight:600}}>{v.prezzo_override?'euro'+Number(v.prezzo_override).toFixed(2):<span style={{color:'#94a3b8'}}>Base</span>}</td>
+                <td style={{padding:'10px 14px',fontSize:14}}><span style={{background:v.stock>0?'#d1fae5':'#fee2e2',color:v.stock>0?'#065f46':'#991b1b',padding:'2px 8px',borderRadius:6,fontSize:13}}>{v.stock}</span></td>
+                <td style={{padding:'10px 14px'}}><button onClick={()=>eliminaVariante(v.id)} style={{background:'#fee2e2',color:'#ef4444',border:'none',borderRadius:6,padding:'4px 10px',cursor:'pointer',fontSize:13}}>Elimina</button></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
 
-  const badgeStato = (stato: string) => {
-    const colors: any = { attivo: '#22c55e', bozza: '#f59e0b', fuori_produzione: '#ef4444' }
-    return { background: (colors[stato] || '#94a3b8') + '20', color: colors[stato] || '#64748b', padding: '2px 8px', borderRadius: '12px', fontSize: '11px', fontWeight: '600', border: '1px solid ' + (colors[stato] || '#64748b') }
-  }
+  if (view === 'form') return (
+    <div style={{padding:24,maxWidth:800,margin:'0 auto'}}>
+      <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:24}}>
+        <button onClick={()=>{setView('lista');setForm({...emptyForm});setEditId(null)}} style={btn('#64748b')}>Indietro</button>
+        <h1 style={{margin:0,fontSize:22,fontWeight:700}}>{editId?'Modifica Articolo':'Nuovo Articolo'}</h1>
+      </div>
+      <Err/>
+      <div style={{display:'flex',gap:4,marginBottom:20,borderBottom:'2px solid #e2e8f0'}}>
+        {[['info','Info Base'],['listini','Listini e IVA']].map(([t,label])=>(
+          <button key={t} onClick={()=>setTab(t as any)} style={{background:'none',border:'none',padding:'10px 20px',cursor:'pointer',fontWeight:tab===t?700:400,color:tab===t?'#3b82f6':'#64748b',borderBottom:tab===t?'2px solid #3b82f6':'2px solid transparent',marginBottom:-2}}>{label}</button>
+        ))}
+      </div>
+      <div style={{background:'#fff',borderRadius:12,padding:24,boxShadow:'0 2px 8px rgba(0,0,0,0.06)'}}>
+        {tab==='info' && (
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16}}>
+            <div style={{gridColumn:'1/-1'}}><label style={{fontSize:12,color:'#64748b',display:'block',marginBottom:4}}>Nome Articolo *</label><input style={inp()} value={form.nome} onChange={e=>setForm(p=>({...p,nome:e.target.value}))} placeholder="Nome articolo"/></div>
+            <div><label style={{fontSize:12,color:'#64748b',display:'block',marginBottom:4}}>Codice Articolo</label><input style={inp()} value={form.codice} onChange={e=>setForm(p=>({...p,codice:e.target.value}))} placeholder="es. ART001"/></div>
+            <div><label style={{fontSize:12,color:'#64748b',display:'block',marginBottom:4}}>EAN / Barcode</label><input style={inp()} value={form.ean} onChange={e=>setForm(p=>({...p,ean:e.target.value}))} placeholder="Scansiona o digita EAN"/></div>
+            <div><label style={{fontSize:12,color:'#64748b',display:'block',marginBottom:4}}>Categoria</label><select style={inp()} value={form.categoria_id} onChange={e=>setForm(p=>({...p,categoria_id:e.target.value}))}><option value="">-- Nessuna --</option>{categorie.map(c=><option key={c.id} value={c.id}>{c.nome}</option>)}</select></div>
+            <div><label style={{fontSize:12,color:'#64748b',display:'block',marginBottom:4}}>Unita di Misura</label><select style={inp()} value={form.um} onChange={e=>setForm(p=>({...p,um:e.target.value}))}>{['Pz','Kg','Lt','Mt','Conf','Set','Paia'].map(u=><option key={u}>{u}</option>)}</select></div>
+            <div><label style={{fontSize:12,color:'#64748b',display:'block',marginBottom:4}}>Stock attuale</label><input type="number" style={inp()} value={form.stock} onChange={e=>setForm(p=>({...p,stock:Number(e.target.value)}))}/></div>
+            <div style={{gridColumn:'1/-1'}}><label style={{fontSize:12,color:'#64748b',display:'block',marginBottom:4}}>Descrizione</label><textarea style={{...inp(),height:80,resize:'vertical'}} value={form.descrizione} onChange={e=>setForm(p=>({...p,descrizione:e.target.value}))} placeholder="Descrizione articolo..."/></div>
+          </div>
+        )}
+        {tab==='listini' && (
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16}}>
+            <div><label style={{fontSize:12,color:'#64748b',display:'block',marginBottom:4}}>Prezzo Vendita (Listino Base)</label><input type="number" step="0.01" style={inp()} value={form.prezzo} onChange={e=>setForm(p=>({...p,prezzo:Number(e.target.value)}))}/></div>
+            <div><label style={{fontSize:12,color:'#64748b',display:'block',marginBottom:4}}>Prezzo Ingrosso</label><input type="number" step="0.01" style={inp()} value={form.prezzo_ingrosso} onChange={e=>setForm(p=>({...p,prezzo_ingrosso:Number(e.target.value)}))}/></div>
+            <div><label style={{fontSize:12,color:'#64748b',display:'block',marginBottom:4}}>Prezzo Promo</label><input type="number" step="0.01" style={inp()} value={form.prezzo_promo} onChange={e=>setForm(p=>({...p,prezzo_promo:Number(e.target.value)}))}/></div>
+            <div><label style={{fontSize:12,color:'#64748b',display:'block',marginBottom:4}}>Prezzo VIP</label><input type="number" step="0.01" style={inp()} value={form.prezzo_vip} onChange={e=>setForm(p=>({...p,prezzo_vip:Number(e.target.value)}))}/></div>
+            <div><label style={{fontSize:12,color:'#64748b',display:'block',marginBottom:4}}>IVA %</label><select style={inp()} value={form.iva} onChange={e=>setForm(p=>({...p,iva:Number(e.target.value)}))}>{[0,4,5,10,22].map(v=><option key={v} value={v}>{v}%</option>)}</select></div>
+          </div>
+        )}
+        <div style={{marginTop:24,display:'flex',gap:12}}>
+          <button onClick={salvaArticolo} disabled={saving} style={btn('#10b981',{padding:'10px 32px'})}>{saving?'Salvataggio...':(editId?'Aggiorna':'+ Salva Articolo')}</button>
+          <button onClick={()=>{setView('lista');setForm({...emptyForm});setEditId(null)}} style={btn('#64748b',{padding:'10px 20px'})}>Annulla</button>
+        </div>
+      </div>
+    </div>
+  )
 
   return (
-    <div style={{ padding: '20px', maxWidth: '1200px', margin: '0 auto' }}>
-      {/* Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px', flexWrap: 'wrap', gap: '12px' }}>
+    <div style={{padding:24}}>
+      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:24,flexWrap:'wrap',gap:12}}>
         <div>
-          <h1 style={{ fontSize: '28px', fontWeight: '800', color: '#0f172a', margin: 0 }}>Articoli</h1>
-          <p style={{ color: '#64748b', margin: '4px 0 0', fontSize: '14px' }}>Catalogo prodotti e servizi</p>
+          <h1 style={{margin:0,fontSize:26,fontWeight:700}}>Articoli</h1>
+          <p style={{margin:0,fontSize:14,color:'#64748b'}}>Gestione articoli, varianti, colori e misure</p>
         </div>
-        <button onClick={() => { setForm(emptyForm); setEditId(null); setTabForm('dati'); setShowForm(true) }}
-          style={{ background: '#3b82f6', color: 'white', border: 'none', borderRadius: '10px', padding: '12px 20px', fontWeight: '700', cursor: 'pointer', fontSize: '15px' }}>
-          + Nuovo Articolo
-        </button>
+        <div style={{display:'flex',gap:10}}>
+          <button onClick={()=>setView('tabelle')} style={btn('#8b5cf6')}>Tabelle</button>
+          <button onClick={()=>{setForm({...emptyForm});setEditId(null);setTab('info');setView('form')}} style={btn('#3b82f6')}>+ Nuovo Articolo</button>
+        </div>
       </div>
-
-      {error && <div style={{ background: '#fee2e2', color: '#991b1b', padding: '12px', borderRadius: '8px', marginBottom: '16px', fontSize: '14px' }} onClick={() => setError('')}>{error} ✕</div>}
-      {success && <div style={{ background: '#dcfce7', color: '#166534', padding: '12px', borderRadius: '8px', marginBottom: '16px', fontSize: '14px' }} onClick={() => setSuccess('')}>{success} ✕</div>}
-
-      {/* KPI */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '16px', marginBottom: '24px' }}>
-        {[
-          { label: 'Totale Articoli', value: kpi.totale, color: '#3b82f6' },
-          { label: 'Attivi', value: kpi.attivi, color: '#22c55e' },
-          { label: 'Sotto Scorta', value: kpi.sottoScorta, color: '#ef4444' },
-          { label: 'Valore Stock', value: '€' + kpi.valoreStock.toFixed(0), color: '#8b5cf6' },
-        ].map(k => (
-          <div key={k.label} style={{ background: 'white', borderRadius: '12px', padding: '16px', boxShadow: '0 1px 4px rgba(0,0,0,0.08)', borderLeft: `4px solid ${k.color}` }}>
-            <div style={{ fontSize: '24px', fontWeight: '800', color: k.color }}>{k.value}</div>
-            <div style={{ fontSize: '13px', color: '#64748b', marginTop: '4px' }}>{k.label}</div>
-          </div>
-        ))}
+      <Err/><Suc/>
+      <div style={{display:'flex',gap:10,marginBottom:20,flexWrap:'wrap'}}>
+        <input style={{...inp(),maxWidth:280}} value={cerca} onChange={e=>setCerca(e.target.value)} placeholder="Cerca nome, codice, EAN..."/>
+        <select style={{...inp(),maxWidth:200}} value={filtroCat} onChange={e=>setFiltroCat(e.target.value)}><option value="tutti">Tutte le categorie</option>{categorie.map(c=><option key={c.id} value={c.id}>{c.nome}</option>)}</select>
+        <span style={{alignSelf:'center',fontSize:13,color:'#64748b'}}>{artFiltrati.length} articoli</span>
       </div>
-
-      {/* Filtri */}
-      <div style={{ background: 'white', borderRadius: '12px', padding: '16px', marginBottom: '20px', boxShadow: '0 1px 4px rgba(0,0,0,0.08)', display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'center' }}>
-        <input placeholder="🔍 Cerca per nome, codice, EAN..." value={cerca} onChange={e => setCerca(e.target.value)}
-          style={{ flex: 1, minWidth: '200px', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '8px 12px', fontSize: '14px', outline: 'none' }} />
-        {['tutti', 'attivo', 'bozza', 'fuori_produzione'].map(s => (
-          <button key={s} onClick={() => setFiltroStato(s)}
-            style={{ padding: '8px 16px', borderRadius: '8px', border: 'none', cursor: 'pointer', fontWeight: '600', fontSize: '13px', background: filtroStato === s ? '#3b82f6' : '#f1f5f9', color: filtroStato === s ? 'white' : '#374151' }}>
-            {s === 'fuori_produzione' ? 'Fuori prod.' : s.charAt(0).toUpperCase() + s.slice(1)}
-          </button>
-        ))}
-      </div>
-
-      {/* Lista articoli */}
-      {loading ? (
-        <div style={{ textAlign: 'center', padding: '60px', color: '#64748b' }}>
-          <div style={{ fontSize: '40px', marginBottom: '12px' }}>⏳</div>
-          <p>Caricamento articoli...</p>
-        </div>
-      ) : articoliFiltrati.length === 0 ? (
-        <div style={{ textAlign: 'center', padding: '60px', color: '#64748b', background: 'white', borderRadius: '12px' }}>
-          <div style={{ fontSize: '40px', marginBottom: '12px' }}>📦</div>
-          <p style={{ fontWeight: '600' }}>Nessun articolo trovato</p>
-          <p style={{ fontSize: '14px' }}>Clicca "+ Nuovo Articolo" per aggiungere il primo</p>
-        </div>
-      ) : (
-        <div style={{ display: 'grid', gap: '12px' }}>
-          {articoliFiltrati.map(a => (
-            <div key={a.id} style={{ background: 'white', borderRadius: '12px', padding: '16px 20px', boxShadow: '0 1px 4px rgba(0,0,0,0.08)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
-              <div style={{ flex: 1 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', marginBottom: '6px' }}>
-                  <span style={{ fontWeight: '700', fontSize: '16px', color: '#0f172a' }}>{a.nome}</span>
-                  <span style={{ background: '#f1f5f9', color: '#374151', padding: '2px 8px', borderRadius: '6px', fontSize: '12px', fontWeight: '600' }}>{a.codice}</span>
-                  {a.ean && <span style={{ background: '#eff6ff', color: '#3b82f6', padding: '2px 8px', borderRadius: '6px', fontSize: '12px' }}>EAN: {a.ean}</span>}
-                  <span style={badgeStato(a.stato)}>{a.stato}</span>
-                  {a.stock <= a.stock_minimo && a.stock_minimo > 0 && <span style={{ background: '#fef2f2', color: '#ef4444', padding: '2px 8px', borderRadius: '6px', fontSize: '12px', fontWeight: '700' }}>⚠️ SOTTO SCORTA</span>}
-                </div>
-                <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', fontSize: '13px', color: '#64748b' }}>
-                  {a.categoria && <span>📁 {a.categoria}</span>}
-                  <span>Stock: <b style={{ color: a.stock <= a.stock_minimo && a.stock_minimo > 0 ? '#ef4444' : '#22c55e' }}>{a.stock} {a.um}</b></span>
-                  <span>Costo: <b style={{ color: '#374151' }}>€{a.costo}</b></span>
-                </div>
-                <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', fontSize: '13px', color: '#94a3b8', marginTop: '4px' }}>
-                  <span>Base: <b style={{ color: '#3b82f6' }}>€{a.prezzo_base}</b></span>
-                  <span>Premium: <b style={{ color: '#8b5cf6' }}>€{a.prezzo_premium}</b></span>
-                  <span>Rivenditori: <b style={{ color: '#22c55e' }}>€{a.prezzo_rivenditori}</b></span>
-                  <span>IVA: {a.iva}%</span>
-                </div>
-              </div>
-              <div style={{ display: 'flex', gap: '8px' }}>
-                <button onClick={() => apriModifica(a)}
-                  style={{ background: '#eff6ff', color: '#3b82f6', border: 'none', borderRadius: '8px', padding: '8px 14px', cursor: 'pointer', fontSize: '13px', fontWeight: '600' }}>✏️ Modifica</button>
-                <button onClick={() => eliminaArticolo(a.id)}
-                  style={{ background: '#fef2f2', color: '#ef4444', border: 'none', borderRadius: '8px', padding: '8px 14px', cursor: 'pointer', fontSize: '13px', fontWeight: '600' }}>🗑️</button>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Modal Form */}
-      {showForm && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '20px' }}>
-          <div style={{ background: 'white', borderRadius: '16px', padding: '28px', width: '100%', maxWidth: '600px', maxHeight: '90vh', overflowY: 'auto' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-              <h2 style={{ margin: 0, fontSize: '22px', fontWeight: '800' }}>{editId ? 'Modifica Articolo' : 'Nuovo Articolo'}</h2>
-              <button onClick={() => setShowForm(false)} style={{ background: 'none', border: 'none', fontSize: '24px', cursor: 'pointer', color: '#64748b' }}>✕</button>
-            </div>
-
-            <div style={{ display: 'flex', gap: '4px', marginBottom: '20px', background: '#f1f5f9', borderRadius: '10px', padding: '4px' }}>
-              {tabs.map(t => (
-                <button key={t.id} onClick={() => setTabForm(t.id)}
-                  style={{ flex: 1, padding: '8px 4px', border: 'none', borderRadius: '8px', cursor: 'pointer', fontSize: '12px', fontWeight: '600', background: tabForm === t.id ? 'white' : 'transparent', color: tabForm === t.id ? '#3b82f6' : '#64748b', boxShadow: tabForm === t.id ? '0 1px 4px rgba(0,0,0,0.1)' : 'none' }}>
-                  {t.label}
-                </button>
+      <div style={{background:'#fff',borderRadius:12,boxShadow:'0 2px 8px rgba(0,0,0,0.06)',overflow:'hidden'}}>
+        {loading?<div style={{padding:40,textAlign:'center',color:'#94a3b8'}}>Caricamento...</div>:(
+          <table style={{width:'100%',borderCollapse:'collapse'}}>
+            <thead><tr style={{background:'#f8fafc'}}>{['Codice','Nome','Categoria','EAN','Prezzo','Stock','IVA','Azioni'].map(h=><th key={h} style={{padding:'12px 14px',textAlign:'left',fontSize:12,fontWeight:600,color:'#64748b',borderBottom:'1px solid #e2e8f0'}}>{h}</th>)}</tr></thead>
+            <tbody>
+              {artFiltrati.length===0?<tr><td colSpan={8} style={{padding:40,textAlign:'center',color:'#94a3b8'}}>Nessun articolo trovato</td></tr>:artFiltrati.map(a=>(
+                <tr key={a.id} style={{borderBottom:'1px solid #f1f5f9'}}>
+                  <td style={{padding:'10px 14px',fontSize:13,fontFamily:'monospace',color:'#64748b'}}>{a.codice||'--'}</td>
+                  <td style={{padding:'10px 14px'}}><div style={{fontWeight:600,fontSize:14}}>{a.nome}</div>{a.descrizione&&<div style={{fontSize:12,color:'#94a3b8',marginTop:2}}>{a.descrizione.substring(0,50)}</div>}</td>
+                  <td style={{padding:'10px 14px',fontSize:13}}>{a.categorie_prodotto?.nome||a.categoria||'--'}</td>
+                  <td style={{padding:'10px 14px',fontSize:12,fontFamily:'monospace'}}>{a.ean||'--'}</td>
+                  <td style={{padding:'10px 14px',fontSize:14,fontWeight:600}}>euro{Number(a.prezzo||0).toFixed(2)}</td>
+                  <td style={{padding:'10px 14px'}}><span style={{background:(a.stock||0)>0?'#d1fae5':'#fee2e2',color:(a.stock||0)>0?'#065f46':'#991b1b',padding:'2px 8px',borderRadius:6,fontSize:13}}>{a.stock||0}</span></td>
+                  <td style={{padding:'10px 14px',fontSize:13}}>{a.iva||22}%</td>
+                  <td style={{padding:'10px 14px'}}>
+                    <div style={{display:'flex',gap:6}}>
+                      <button onClick={()=>apriVarianti(a)} style={{background:'#ede9fe',color:'#7c3aed',border:'none',borderRadius:6,padding:'4px 10px',cursor:'pointer',fontSize:12,fontWeight:600}}>Varianti</button>
+                      <button onClick={()=>{setForm({nome:a.nome,codice:a.codice||'',ean:a.ean||'',categoria_id:a.categoria_id||'',prezzo:a.prezzo||0,prezzo_ingrosso:a.prezzo_ingrosso||0,prezzo_promo:a.prezzo_promo||0,prezzo_vip:a.prezzo_vip||0,iva:a.iva||22,um:a.um||'Pz',stock:a.stock||0,descrizione:a.descrizione||'',attivo:a.attivo!==false});setEditId(a.id);setTab('info');setView('form')}} style={{background:'#dbeafe',color:'#1d4ed8',border:'none',borderRadius:6,padding:'4px 10px',cursor:'pointer',fontSize:12}}>Modifica</button>
+                      <button onClick={()=>eliminaArticolo(a.id)} style={{background:'#fee2e2',color:'#ef4444',border:'none',borderRadius:6,padding:'4px 10px',cursor:'pointer',fontSize:12}}>Elimina</button>
+                    </div>
+                  </td>
+                </tr>
               ))}
-            </div>
-
-            {tabForm === 'dati' && (
-              <div style={{ display: 'grid', gap: '14px' }}>
-                <div>
-                  <label style={lbl}>Nome Articolo *</label>
-                  <input style={inp()} value={form.nome} onChange={e => setForm({ ...form, nome: e.target.value })} placeholder="Es. Scarpa Running Pro" />
-                </div>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-                  <div>
-                    <label style={lbl}>Codice Articolo *</label>
-                    <input style={inp()} value={form.codice} onChange={e => setForm({ ...form, codice: e.target.value })} placeholder="ART-001" />
-                  </div>
-                  <div>
-                    <label style={lbl}>Codice EAN / Barcode</label>
-                    <input style={inp()} value={form.ean} onChange={e => setForm({ ...form, ean: e.target.value })} placeholder="8001234567890" />
-                  </div>
-                </div>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-                  <div>
-                    <label style={lbl}>Categoria</label>
-                    <input style={inp()} value={form.categoria} onChange={e => setForm({ ...form, categoria: e.target.value })} placeholder="Es. Abbigliamento" />
-                  </div>
-                  <div>
-                    <label style={lbl}>Sottocategoria</label>
-                    <input style={inp()} value={form.sottocategoria} onChange={e => setForm({ ...form, sottocategoria: e.target.value })} placeholder="Es. Scarpe" />
-                  </div>
-                </div>
-                <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '12px' }}>
-                  <div>
-                    <label style={lbl}>Codice Fornitore</label>
-                    <input style={inp()} value={form.codice_fornitore} onChange={e => setForm({ ...form, codice_fornitore: e.target.value })} placeholder="Codice del fornitore" />
-                  </div>
-                  <div>
-                    <label style={lbl}>Unità di Misura</label>
-                    <select style={sel} value={form.um} onChange={e => setForm({ ...form, um: e.target.value })}>
-                      <option value="pz">Pz</option>
-                      <option value="kg">Kg</option>
-                      <option value="lt">Lt</option>
-                      <option value="mt">Mt</option>
-                      <option value="conf">Conf</option>
-                    </select>
-                  </div>
-                </div>
-                <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '12px' }}>
-                  <div>
-                    <label style={lbl}>Stato</label>
-                    <select style={sel} value={form.stato} onChange={e => setForm({ ...form, stato: e.target.value })}>
-                      <option value="attivo">Attivo</option>
-                      <option value="bozza">Bozza</option>
-                      <option value="fuori_produzione">Fuori produzione</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label style={lbl}>IVA %</label>
-                    <select style={sel} value={form.iva} onChange={e => setForm({ ...form, iva: Number(e.target.value) })}>
-                      <option value={4}>4%</option>
-                      <option value={10}>10%</option>
-                      <option value={22}>22%</option>
-                    </select>
-                  </div>
-                </div>
-                <div>
-                  <label style={lbl}>Descrizione</label>
-                  <textarea style={{ ...inp(), minHeight: '80px', resize: 'vertical' } as any} value={form.descrizione} onChange={e => setForm({ ...form, descrizione: e.target.value })} placeholder="Descrizione dettagliata..." />
-                </div>
-              </div>
-            )}
-
-            {tabForm === 'prezzi' && (
-              <div style={{ display: 'grid', gap: '14px' }}>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-                  <div>
-                    <label style={lbl}>Costo Acquisto €</label>
-                    <input style={inp()} type="number" min="0" step="0.01" value={form.costo} onChange={e => handleCostoRicarica('costo', Number(e.target.value))} />
-                  </div>
-                  <div>
-                    <label style={lbl}>Ricarica %</label>
-                    <input style={inp()} type="number" min="0" step="0.1" value={form.ricarica} onChange={e => handleCostoRicarica('ricarica', Number(e.target.value))} />
-                  </div>
-                </div>
-                <div style={{ background: '#f0fdf4', borderRadius: '10px', padding: '14px', border: '1px solid #bbf7d0' }}>
-                  <div style={{ fontSize: '12px', color: '#166534', fontWeight: '700', marginBottom: '8px' }}>💡 PREZZI CALCOLATI AUTOMATICAMENTE</div>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px', fontSize: '13px' }}>
-                    <div style={{ textAlign: 'center' }}>
-                      <div style={{ color: '#64748b', fontSize: '11px' }}>BASE</div>
-                      <div style={{ fontWeight: '800', color: '#3b82f6', fontSize: '18px' }}>€{form.prezzo_base.toFixed(2)}</div>
-                    </div>
-                    <div style={{ textAlign: 'center' }}>
-                      <div style={{ color: '#64748b', fontSize: '11px' }}>PREMIUM (+15%)</div>
-                      <div style={{ fontWeight: '800', color: '#8b5cf6', fontSize: '18px' }}>€{form.prezzo_premium.toFixed(2)}</div>
-                    </div>
-                    <div style={{ textAlign: 'center' }}>
-                      <div style={{ color: '#64748b', fontSize: '11px' }}>RIVENDITORI (-15%)</div>
-                      <div style={{ fontWeight: '800', color: '#22c55e', fontSize: '18px' }}>€{form.prezzo_rivenditori.toFixed(2)}</div>
-                    </div>
-                  </div>
-                </div>
-                <div>
-                  <label style={lbl}>Prezzo Base (modifica manuale)</label>
-                  <input style={inp()} type="number" min="0" step="0.01" value={form.prezzo_base} onChange={e => setForm({ ...form, prezzo_base: Number(e.target.value) })} />
-                </div>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-                  <div>
-                    <label style={lbl}>Prezzo Premium</label>
-                    <input style={inp()} type="number" min="0" step="0.01" value={form.prezzo_premium} onChange={e => setForm({ ...form, prezzo_premium: Number(e.target.value) })} />
-                  </div>
-                  <div>
-                    <label style={lbl}>Prezzo Rivenditori</label>
-                    <input style={inp()} type="number" min="0" step="0.01" value={form.prezzo_rivenditori} onChange={e => setForm({ ...form, prezzo_rivenditori: Number(e.target.value) })} />
-                  </div>
-                </div>
-                <div style={{ background: '#eff6ff', borderRadius: '10px', padding: '14px', border: '1px solid #bfdbfe' }}>
-                  <div style={{ fontSize: '12px', color: '#1e40af', fontWeight: '700', marginBottom: '8px' }}>💰 PREZZI IVA INCLUSA ({form.iva}%)</div>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px', fontSize: '13px' }}>
-                    {[['Base', form.prezzo_base], ['Premium', form.prezzo_premium], ['Rivenditori', form.prezzo_rivenditori]].map(([l, p]) => (
-                      <div key={l as string} style={{ textAlign: 'center' }}>
-                        <div style={{ color: '#64748b', fontSize: '11px' }}>{l as string}</div>
-                        <div style={{ fontWeight: '700', color: '#1e40af' }}>€{((p as number) * (1 + form.iva / 100)).toFixed(2)}</div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {tabForm === 'magazzino' && (
-              <div style={{ display: 'grid', gap: '14px' }}>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' }}>
-                  <div>
-                    <label style={lbl}>Stock Attuale</label>
-                    <input style={inp()} type="number" min="0" value={form.stock} onChange={e => setForm({ ...form, stock: Number(e.target.value) })} />
-                  </div>
-                  <div>
-                    <label style={lbl}>Stock Minimo</label>
-                    <input style={inp()} type="number" min="0" value={form.stock_minimo} onChange={e => setForm({ ...form, stock_minimo: Number(e.target.value) })} />
-                  </div>
-                  <div>
-                    <label style={lbl}>Stock Massimo</label>
-                    <input style={inp()} type="number" min="0" value={form.stock_massimo} onChange={e => setForm({ ...form, stock_massimo: Number(e.target.value) })} />
-                  </div>
-                </div>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-                  <div>
-                    <label style={lbl}>Ubicazione</label>
-                    <input style={inp()} value={form.ubicazione} onChange={e => setForm({ ...form, ubicazione: e.target.value })} placeholder="Es. Scaffale A3" />
-                  </div>
-                  <div>
-                    <label style={lbl}>Fornitore</label>
-                    <input style={inp()} value={form.fornitore} onChange={e => setForm({ ...form, fornitore: e.target.value })} placeholder="Nome fornitore" />
-                  </div>
-                </div>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' }}>
-                  <div>
-                    <label style={lbl}>Tempo Riordino (gg)</label>
-                    <input style={inp()} type="number" min="0" value={form.tempo_riordino} onChange={e => setForm({ ...form, tempo_riordino: Number(e.target.value) })} />
-                  </div>
-                  <div>
-                    <label style={lbl}>Peso (kg)</label>
-                    <input style={inp()} type="number" min="0" step="0.001" value={form.peso} onChange={e => setForm({ ...form, peso: Number(e.target.value) })} />
-                  </div>
-                  <div>
-                    <label style={lbl}>Dimensioni</label>
-                    <input style={inp()} value={form.dimensioni} onChange={e => setForm({ ...form, dimensioni: e.target.value })} placeholder="Es. 30x20x10 cm" />
-                  </div>
-                </div>
-                <div>
-                  <label style={lbl}>Note</label>
-                  <textarea style={{ ...inp(), minHeight: '80px', resize: 'vertical' } as any} value={form.note} onChange={e => setForm({ ...form, note: e.target.value })} placeholder="Note interne..." />
-                </div>
-              </div>
-            )}
-
-            <div style={{ display: 'flex', gap: '10px', marginTop: '20px' }}>
-              {tabForm !== 'dati' && (
-                <button onClick={() => setTabForm(tabs[tabs.findIndex(t => t.id === tabForm) - 1].id)}
-                  style={{ flex: 1, background: '#f1f5f9', color: '#374151', border: 'none', borderRadius: '8px', padding: '12px', fontWeight: '600', cursor: 'pointer' }}>← Indietro</button>
-              )}
-              {tabForm !== 'magazzino' ? (
-                <button onClick={() => setTabForm(tabs[tabs.findIndex(t => t.id === tabForm) + 1].id)}
-                  style={{ flex: 1, background: '#3b82f6', color: 'white', border: 'none', borderRadius: '8px', padding: '12px', fontWeight: '600', cursor: 'pointer' }}>Avanti →</button>
-              ) : (
-                <button onClick={salvaArticolo} disabled={saving}
-                  style={{ flex: 1, background: saving ? '#94a3b8' : '#22c55e', color: 'white', border: 'none', borderRadius: '8px', padding: '12px', fontWeight: '700', cursor: 'pointer' }}>
-                  {saving ? '⏳ Salvataggio...' : '💾 Salva Articolo'}
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
+            </tbody>
+          </table>
+        )}
+      </div>
     </div>
   )
 }

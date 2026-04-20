@@ -1,549 +1,448 @@
 'use client'
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { supabase, supabaseAdmin } from '../../../lib/supabase'
 
 const USER_ID = 'f1e0512f-0ecd-41b5-a29a-33fc9f832528'
+const PAGAMENTI = ['Contanti', 'Carta', 'Bonifico', 'Assegno', 'RiBa']
+const LISTINI = ['Base', 'Ingrosso', 'Promo', 'VIP']
 
-type RigaCarrello = {
-  id: string; articolo_id?: string; codice: string; nome: string
-  variante?: string; colore?: string
-  qta: number; prezzo: number; sconto: number; iva: number; totale: number
+function calcolaRiga(r: any) {
+  const prezzoScontato = (r.prezzo || 0) * (1 - (r.sconto || 0) / 100)
+  const importo = prezzoScontato * (r.qta || 1) * (1 + (r.iva || 22) / 100)
+  return { ...r, importo: Math.round(importo * 100) / 100 }
 }
 
-const LISTINI = ['Base', 'Premium', 'Rivenditori', 'Ingrosso']
-const PAGAMENTI = [
-  { id: 'contanti', label: 'Contanti', icon: '💵' },
-  { id: 'carta', label: 'Carta/POS', icon: '💳' },
-  { id: 'bonifico', label: 'Bonifico', icon: '🏦' },
-  { id: 'assegno', label: 'Assegno', icon: '📄' },
-  { id: 'credito', label: 'A Credito', icon: '📋' },
-  { id: '30gg', label: '30 giorni', icon: '📅' },
-  { id: '60gg', label: '60 giorni', icon: '📅' },
-  { id: '90gg', label: '90 giorni', icon: '📅' },
-]
-
 export default function CassaPage() {
-  const [modalita, setModalita] = useState<'home' | 'veloce' | 'scan' | 'archivio'>('home')
-  const [articoli, setArticoli] = useState<any[]>([])
+  const [righe, setRighe] = useState<any[]>([])
   const [clienti, setClienti] = useState<any[]>([])
-  const [carrello, setCarrello] = useState<RigaCarrello[]>([])
+  const [articoli, setArticoli] = useState<any[]>([])
+  const [varianti, setVarianti] = useState<any[]>([])
+  const [documentiAperti, setDocumentiAperti] = useState<any[]>([])
   const [clienteSelezionato, setClienteSelezionato] = useState<any>(null)
-  const [cerca, setCerca] = useState('')
-  const [cercaCliente, setCercaCliente] = useState('')
-  const [showCercaCliente, setShowCercaCliente] = useState(false)
-  const [barcode, setBarcode] = useState('')
-  const [scanFeedback, setScanFeedback] = useState<'ok' | 'error' | null>(null)
-  const [pagamento, setPagamento] = useState('contanti')
   const [listino, setListino] = useState('Base')
-  const [scontoTotale, setScontoTotale] = useState(0)
-  const [showPaga, setShowPaga] = useState(false)
-  const [contantiDati, setContantiDati] = useState(0)
-  const [vendite, setVendite] = useState<any[]>([])
-  const [loading, setLoading] = useState(false)
-  const [success, setSuccess] = useState('')
-  const [error, setError] = useState('')
+  const [pagamento, setPagamento] = useState('Contanti')
   const [note, setNote] = useState('')
-  const [showNota, setShowNota] = useState(false)
-  const [prezzoCustom, setPrezzoCustom] = useState<{[id: string]: number}>({})
-  const barcodeRef = useRef<HTMLInputElement>(null)
+  const [loading, setLoading] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  const [success, setSuccess] = useState('')
+  const [cercaCliente, setCercaCliente] = useState('')
+  const [suggerimentiClienti, setSuggerimentiClienti] = useState<any[]>([])
+  const [cercaArt, setCercaArt] = useState('')
+  const [suggerimentiArt, setSuggerimentiArt] = useState<any[]>([])
+  const [modalPagamento, setModalPagamento] = useState(false)
+  const [importoPagato, setImportoPagato] = useState('')
+  const [modalDocumenti, setModalDocumenti] = useState(false)
+  const [tab, setTab] = useState<'cassa'|'incasso'>('cassa')
+  const barcodeInput = useRef<HTMLInputElement>(null)
+  const cercaArtRef = useRef<HTMLInputElement>(null)
 
-  useEffect(() => { loadArticoli(); loadClienti(); loadVendite() }, [])
-  useEffect(() => { if (modalita === 'scan' && barcodeRef.current) barcodeRef.current.focus() }, [modalita])
+  useEffect(() => {
+    loadBase()
+    // Focus sul barcode input all'avvio
+    setTimeout(() => barcodeInput.current?.focus(), 300)
+  }, [])
 
-  async function loadArticoli() {
-    const { data } = await supabaseAdmin.from('articoli').select('*').eq('stato', 'attivo')
-    setArticoli(data || [])
-  }
-  async function loadClienti() {
-    const { data } = await supabaseAdmin.from('clienti').select('*').eq('stato', 'attivo').order('nome')
-    setClienti(data || [])
-  }
-  async function loadVendite() {
-    const { data } = await supabaseAdmin.from('vendite').select('*').order('created_at', { ascending: false }).limit(30)
-    setVendite(data || [])
-  }
-
-  function getPrezzoListino(art: any) {
-    const l = listino.toLowerCase()
-    if (l === 'premium') return art.prezzo_premium || art.prezzo_base || 0
-    if (l === 'rivenditori') return art.prezzo_rivenditori || art.prezzo_base || 0
-    if (l === 'ingrosso') return (art.prezzo_base || 0) * 0.75
-    return art.prezzo_base || 0
+  async function loadBase() {
+    const [{ data: cls }, { data: arts }, { data: vars }] = await Promise.all([
+      supabaseAdmin.from('clienti').select('id, nome, piva, listino').order('nome'),
+      supabaseAdmin.from('articoli').select('id, nome, codice, ean, prezzo, prezzo_ingrosso, prezzo_promo, prezzo_vip, iva, um, stock').order('nome'),
+      supabaseAdmin.from('varianti_articolo').select('id, articolo_id, colore_nome, misura_nome, ean, codice_variante, prezzo_override, stock'),
+    ])
+    setClienti(cls || [])
+    setArticoli(arts || [])
+    setVarianti(vars || [])
   }
 
-  function aggiungiAlCarrello(art: any, qtaExtra = 1) {
-    const prezzo = getPrezzoListino(art)
-    const scontoCliente = clienteSelezionato?.sconto || 0
-    setCarrello(prev => {
-      const idx = prev.findIndex(r => r.articolo_id === art.id)
-      if (idx >= 0) {
-        const updated = [...prev]
-        const r = updated[idx]
-        const newQta = r.qta + qtaExtra
-        updated[idx] = { ...r, qta: newQta, totale: Math.round(newQta * r.prezzo * (1 - r.sconto / 100) * 100) / 100 }
-        return updated
+  async function loadDocumentiCliente(clienteId: string) {
+    const { data } = await supabaseAdmin.from('documenti').select('*').eq('cliente_id', clienteId).in('stato', ['confermato', 'bozza']).order('data_documento', { ascending: false })
+    setDocumentiAperti(data || [])
+  }
+
+  function getPrezzoListino(art: any, lst: string) {
+    if (lst === 'Ingrosso' && art.prezzo_ingrosso > 0) return art.prezzo_ingrosso
+    if (lst === 'Promo' && art.prezzo_promo > 0) return art.prezzo_promo
+    if (lst === 'VIP' && art.prezzo_vip > 0) return art.prezzo_vip
+    return art.prezzo || 0
+  }
+
+  function cercaArticoloPerEan(query: string): any | null {
+    const q = query.trim().toLowerCase()
+    const varMatch = varianti.find(v => v.ean?.toLowerCase() === q || v.codice_variante?.toLowerCase() === q)
+    if (varMatch) {
+      const art = articoli.find(a => a.id === varMatch.articolo_id)
+      if (art) return { art, variante: varMatch }
+    }
+    const artMatch = articoli.find(a => a.ean?.toLowerCase() === q || a.codice?.toLowerCase() === q)
+    if (artMatch) return { art: artMatch, variante: null }
+    return null
+  }
+
+  function aggiungiArticolo(art: any, variante: any) {
+    const prezzo = variante?.prezzo_override || getPrezzoListino(art, listino)
+    const desc = art.nome + (variante ? ` - ${[variante.colore_nome, variante.misura_nome].filter(Boolean).join(' ')}` : '')
+    // Cerca se esiste già la stessa riga
+    const idxEsistente = righe.findIndex(r => r.articolo_id === art.id && r.variante_id === (variante?.id || null))
+    if (idxEsistente >= 0) {
+      const newRighe = [...righe]
+      newRighe[idxEsistente] = calcolaRiga({ ...newRighe[idxEsistente], qta: newRighe[idxEsistente].qta + 1 })
+      setRighe(newRighe)
+    } else {
+      const nuova = calcolaRiga({ articolo_id: art.id, variante_id: variante?.id || null, codice: variante?.codice_variante || art.codice || '', ean: variante?.ean || art.ean || '', descrizione: desc, um: art.um || 'Pz', qta: 1, prezzo, sconto: 0, iva: art.iva || 22, importo: 0 })
+      setRighe(r => [...r, nuova])
+    }
+    setSuggerimentiArt([])
+    setCercaArt('')
+    // Rimetti focus sul barcode
+    setTimeout(() => barcodeInput.current?.focus(), 100)
+  }
+
+  function handleBarcodeKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key === 'Enter') {
+      const val = (e.target as HTMLInputElement).value.trim()
+      if (!val) return
+      const found = cercaArticoloPerEan(val)
+      if (found) {
+        aggiungiArticolo(found.art, found.variante)
+        setError('')
+      } else {
+        setError('Articolo non trovato: ' + val)
+        setTimeout(() => setError(''), 3000)
       }
-      const id = crypto.randomUUID()
-      return [...prev, {
-        id, articolo_id: art.id, codice: art.codice, nome: art.nome,
-        variante: art.variante || '', colore: art.colore || '',
-        qta: qtaExtra, prezzo, sconto: scontoCliente, iva: 22,
-        totale: Math.round(qtaExtra * prezzo * (1 - scontoCliente / 100) * 100) / 100
-      }]
+      ;(e.target as HTMLInputElement).value = ''
+    }
+  }
+
+  function handleCercaArt(q: string) {
+    setCercaArt(q)
+    if (q.length < 2) { setSuggerimentiArt([]); return }
+    const ql = q.toLowerCase()
+    const matches: any[] = []
+    articoli.forEach(art => {
+      if (art.nome?.toLowerCase().includes(ql) || art.codice?.toLowerCase().includes(ql) || art.ean?.includes(ql)) {
+        matches.push({ art, variante: null })
+      }
+      varianti.filter(v => v.articolo_id === art.id).forEach(v => {
+        if (v.ean?.includes(ql) || v.codice_variante?.toLowerCase().includes(ql) || art.nome?.toLowerCase().includes(ql)) {
+          matches.push({ art, variante: v })
+        }
+      })
     })
+    setSuggerimentiArt(matches.slice(0, 12))
   }
 
-  function rimuoviRiga(id: string) { setCarrello(prev => prev.filter(r => r.id !== id)) }
-
-  function aggiornaQta(id: string, delta: number) {
-    setCarrello(prev => prev.map(r => {
-      if (r.id !== id) return r
-      const newQta = Math.max(0.5, r.qta + delta)
-      return { ...r, qta: newQta, totale: Math.round(newQta * r.prezzo * (1 - r.sconto / 100) * 100) / 100 }
-    }).filter(r => r.qta > 0))
+  function aggiornaQta(idx: number, delta: number) {
+    const newRighe = [...righe]
+    const nuovaQta = Math.max(0, newRighe[idx].qta + delta)
+    if (nuovaQta === 0) { newRighe.splice(idx, 1); setRighe(newRighe); return }
+    newRighe[idx] = calcolaRiga({ ...newRighe[idx], qta: nuovaQta })
+    setRighe(newRighe)
   }
 
-  function aggiornaPrezzoRiga(id: string, nuovoPrezzo: number) {
-    setCarrello(prev => prev.map(r => {
-      if (r.id !== id) return r
-      return { ...r, prezzo: nuovoPrezzo, totale: Math.round(r.qta * nuovoPrezzo * (1 - r.sconto / 100) * 100) / 100 }
-    }))
+  function rimuoviRiga(idx: number) {
+    setRighe(r => r.filter((_, i) => i !== idx))
   }
 
-  function aggiornaScontoRiga(id: string, nuovoSconto: number) {
-    setCarrello(prev => prev.map(r => {
-      if (r.id !== id) return r
-      return { ...r, sconto: nuovoSconto, totale: Math.round(r.qta * r.prezzo * (1 - nuovoSconto / 100) * 100) / 100 }
-    }))
+  function setQta(idx: number, qta: number) {
+    if (qta <= 0) { rimuoviRiga(idx); return }
+    const newRighe = [...righe]
+    newRighe[idx] = calcolaRiga({ ...newRighe[idx], qta })
+    setRighe(newRighe)
   }
 
-  function handleBarcode(e: React.KeyboardEvent<HTMLInputElement>) {
-    if (e.key !== 'Enter') return
-    const code = barcode.trim()
-    const art = articoli.find(a => a.ean === code || a.codice === code)
-    if (art) { aggiungiAlCarrello(art); setScanFeedback('ok'); setUltimoScan(art.nome) }
-    else { setScanFeedback('error'); setUltimoScan(code) }
-    setBarcode('')
-    setTimeout(() => setScanFeedback(null), 2000)
-  }
-  const [ultimoScan, setUltimoScan] = useState('')
-
-  const totaleImponibile = carrello.reduce((s, r) => s + r.totale, 0)
-  const scontoEuro = totaleImponibile * scontoTotale / 100
-  const imponibileNetto = totaleImponibile - scontoEuro
-  const totaleIva = Math.round(imponibileNetto * 0.22 * 100) / 100
-  const totaleDovuto = Math.round((imponibileNetto + totaleIva) * 100) / 100
-  const resto = Math.max(0, contantiDati - totaleDovuto)
+  const totale = righe.reduce((s, r) => s + (r.importo || 0), 0)
+  const nArticoli = righe.reduce((s, r) => s + (r.qta || 0), 0)
+  const resto = parseFloat(importoPagato || '0') - totale
 
   async function completaVendita() {
-    if (carrello.length === 0) { setError('Carrello vuoto'); return }
-    setLoading(true); setError(''); setSuccess('')
+    if (righe.length === 0) { setError('Aggiungi almeno un articolo'); return }
+    setSaving(true); setError('')
     const { data: { user } } = await supabase.auth.getUser()
     const uid = user?.id || USER_ID
-
-    // Genera numero documento
     const anno = new Date().getFullYear()
-    const { data: lastDoc } = await supabaseAdmin.from('vendite').select('id').order('created_at', { ascending: false }).limit(1)
-    const progr = (lastDoc?.length || 0) + 1
-    const numDoc = `${anno}_VE${String(progr).padStart(5, '0')}`
-
-    // Salva vendita
-    const { data: vendita, error: ve } = await supabaseAdmin.from('vendite').insert([{
-      user_id: uid,
-      cliente_id: clienteSelezionato?.id || null,
-      cliente_nome: clienteSelezionato?.nome || 'Cliente generico',
-      totale: totaleDovuto,
-      pagamento,
-      listino,
-      sconto_totale: scontoTotale,
-      note,
-      created_at: new Date().toISOString()
-    }]).select().single()
-
-    if (ve || !vendita) { setError('Errore salvataggio: ' + (ve?.message || 'Sconosciuto')); setLoading(false); return }
-
-    // Salva righe vendita
-    await supabaseAdmin.from('vendite_righe').insert(carrello.map(r => ({
-      vendita_id: vendita.id, user_id: uid,
-      articolo_id: r.articolo_id, codice: r.codice, nome: r.nome,
-      qta: r.qta, prezzo_unitario: r.prezzo, sconto: r.sconto, iva: r.iva, totale: r.totale
-    })))
-
-    // Aggiorna stock articoli
-    for (const r of carrello) {
-      if (r.articolo_id) {
-        const art = articoli.find(a => a.id === r.articolo_id)
-        if (art) await supabaseAdmin.from('articoli').update({ stock: Math.max(0, (art.stock || 0) - r.qta) }).eq('id', r.articolo_id)
-      }
+    const { data: lastDoc } = await supabaseAdmin.from('documenti').select('numero_doc').like('numero_doc', `${anno}_INC%`).order('numero_doc', { ascending: false }).limit(1)
+    const lastNum = lastDoc?.[0]?.numero_doc ? parseInt(lastDoc[0].numero_doc.split('INC').pop() || '0') + 1 : 1
+    const numDoc = `${anno}_INC${String(lastNum).padStart(5, '0')}`
+    const totImponibile = righe.reduce((s, r) => s + ((r.importo || 0) / (1 + (r.iva || 22) / 100)), 0)
+    const totIva = totale - totImponibile
+    const docPayload = {
+      user_id: uid, tipo: 'incasso', numero_doc: numDoc, anno,
+      cliente_id: clienteSelezionato?.id || null, cliente_nome: clienteSelezionato?.nome || 'Cliente generico',
+      data_registrazione: new Date().toISOString().split('T')[0], data_documento: new Date().toISOString().split('T')[0],
+      pagamento, listino, note, stato: 'fatturato',
+      totale_imponibile: Math.round(totImponibile * 100) / 100,
+      totale_iva: Math.round(totIva * 100) / 100,
+      totale_documento: Math.round(totale * 100) / 100,
     }
-
-    // Se cliente, aggiorna mastino
+    const { data: docSalvato, error: eDoc } = await supabaseAdmin.from('documenti').insert([docPayload]).select().single()
+    if (eDoc) { setError('Errore: ' + eDoc.message); setSaving(false); return }
+    const righePayload = righe.map((r, i) => ({
+      documento_id: docSalvato.id, user_id: uid, riga_num: i + 1,
+      articolo_id: r.articolo_id, codice: r.codice, ean: r.ean, descrizione: r.descrizione,
+      um: r.um, qta: r.qta, prezzo: r.prezzo, sconto1: r.sconto || 0, sconto2: 0, iva: r.iva,
+      imponibile: Math.round((r.importo / (1 + r.iva / 100)) * 100) / 100, importo: r.importo,
+    }))
+    await supabaseAdmin.from('documenti_righe').insert(righePayload)
     if (clienteSelezionato) {
-      // Calcola saldo attuale
-      const { data: lastMov } = await supabaseAdmin.from('mastino_clienti')
-        .select('saldo_progressivo').eq('cliente_id', clienteSelezionato.id)
-        .order('created_at', { ascending: false }).limit(1)
-      const saldoPrecedente = lastMov?.[0]?.saldo_progressivo || 0
-
-      if (pagamento === 'credito' || pagamento === '30gg' || pagamento === '60gg' || pagamento === '90gg') {
-        // Vendita a credito: movimento DARE
-        const gg = pagamento === '30gg' ? 30 : pagamento === '60gg' ? 60 : pagamento === '90gg' ? 90 : 0
-        const dataScad = gg > 0 ? new Date(Date.now() + gg * 86400000).toISOString().split('T')[0] : null
-        await supabaseAdmin.from('mastino_clienti').insert([{
-          user_id: uid, cliente_id: clienteSelezionato.id, cliente_nome: clienteSelezionato.nome,
-          documento_id: vendita.id, numero_doc: numDoc,
-          data_movimento: new Date().toISOString().split('T')[0],
-          causale: `Vendita ${listino} - ${numDoc}`,
-          tipo_movimento: 'dare', importo_dare: totaleDovuto, importo_avere: 0,
-          saldo_progressivo: saldoPrecedente + totaleDovuto,
-          data_scadenza: dataScad, pagato: false
-        }])
-        // Aggiungi a scadenzario
-        if (dataScad) {
-          await supabaseAdmin.from('scadenzario').insert([{
-            user_id: uid, cliente_id: clienteSelezionato.id, cliente_nome: clienteSelezionato.nome,
-            documento_id: vendita.id, numero_doc: numDoc,
-            data_scadenza: dataScad, importo: totaleDovuto, importo_residuo: totaleDovuto, pagato: false
-          }])
-        }
-      } else {
-        // Pagamento immediato: movimento AVERE (pareggia)
-        await supabaseAdmin.from('mastino_clienti').insert([{
-          user_id: uid, cliente_id: clienteSelezionato.id, cliente_nome: clienteSelezionato.nome,
-          documento_id: vendita.id, numero_doc: numDoc,
-          data_movimento: new Date().toISOString().split('T')[0],
-          causale: `Vendita ${listino} - ${numDoc} (${pagamento})`,
-          tipo_movimento: 'avere', importo_dare: 0, importo_avere: totaleDovuto,
-          saldo_progressivo: saldoPrecedente,
-          pagato: true, data_pagamento: new Date().toISOString().split('T')[0],
-          metodo_pagamento: pagamento
-        }])
-      }
+      const { data: lastMov } = await supabaseAdmin.from('mastino_clienti').select('saldo_progressivo').eq('cliente_id', clienteSelezionato.id).order('created_at', { ascending: false }).limit(1)
+      const saldoPrec = lastMov?.[0]?.saldo_progressivo || 0
+      await supabaseAdmin.from('mastino_clienti').insert([{
+        user_id: uid, cliente_id: clienteSelezionato.id, cliente_nome: clienteSelezionato.nome,
+        documento_id: docSalvato.id, numero_doc: numDoc, data_movimento: new Date().toISOString().split('T')[0],
+        causale: `Incasso cassa - ${numDoc}`, tipo_movimento: 'avere',
+        importo_dare: 0, importo_avere: totale, saldo_progressivo: saldoPrec - totale, pagato: true
+      }])
     }
-
-    setSuccess(`✅ Vendita completata! ${numDoc} — Totale: €${totaleDovuto.toFixed(2)}${pagamento === 'contanti' && contantiDati > 0 ? ` — Resto: €${resto.toFixed(2)}` : ''}`)
-    setCarrello([]); setShowPaga(false); setClienteSelezionato(null); setNote(''); setScontoTotale(0)
-    loadVendite(); loadArticoli()
-    setLoading(false)
-    setTimeout(() => setSuccess(''), 5000)
+    setSuccess(`Vendita completata! Scontrino: ${numDoc}`)
+    setRighe([])
+    setModalPagamento(false)
+    setImportoPagato('')
+    setTimeout(() => setSuccess(''), 4000)
+    setSaving(false)
+    setTimeout(() => barcodeInput.current?.focus(), 200)
   }
 
-  const artFiltrati = articoli.filter(a =>
-    !cerca || a.nome?.toLowerCase().includes(cerca.toLowerCase()) ||
-    a.codice?.toLowerCase().includes(cerca.toLowerCase()) ||
-    a.ean?.includes(cerca)
-  )
-  const clientiFiltrati = clienti.filter(c =>
-    !cercaCliente || c.nome?.toLowerCase().includes(cercaCliente.toLowerCase()) ||
-    c.codice?.toLowerCase().includes(cercaCliente.toLowerCase())
-  )
+  async function incassaDocumento(doc: any) {
+    setSaving(true); setError('')
+    const { data: { user } } = await supabase.auth.getUser()
+    const uid = user?.id || USER_ID
+    await supabaseAdmin.from('documenti').update({ stato: 'fatturato', pagamento }).eq('id', doc.id)
+    const { data: lastMov } = await supabaseAdmin.from('mastino_clienti').select('saldo_progressivo').eq('cliente_id', doc.cliente_id).order('created_at', { ascending: false }).limit(1)
+    const saldoPrec = lastMov?.[0]?.saldo_progressivo || 0
+    await supabaseAdmin.from('mastino_clienti').insert([{
+      user_id: uid, cliente_id: doc.cliente_id, cliente_nome: doc.cliente_nome,
+      documento_id: doc.id, numero_doc: doc.numero_doc, data_movimento: new Date().toISOString().split('T')[0],
+      causale: `Incasso ${doc.numero_doc} - ${pagamento}`, tipo_movimento: 'avere',
+      importo_dare: 0, importo_avere: doc.totale_documento, saldo_progressivo: saldoPrec - doc.totale_documento, pagato: true
+    }])
+    if (doc.data_scadenza) {
+      await supabaseAdmin.from('scadenzario').update({ pagato: true, importo_residuo: 0, data_pagamento: new Date().toISOString().split('T')[0] }).eq('documento_id', doc.id)
+    }
+    setSuccess(`Documento ${doc.numero_doc} incassato!`)
+    loadDocumentiCliente(doc.cliente_id)
+    setSaving(false)
+  }
 
-  // ── HOME ──────────────────────────────────────────────────────────────────
-  if (modalita === 'home') return (
-    <div style={{ padding: 24, maxWidth: 900, margin: '0 auto' }}>
-      <h1 style={{ fontSize: 28, fontWeight: 800, marginBottom: 8, color: '#1e293b' }}>🏪 Cassa</h1>
-      <p style={{ color: '#64748b', marginBottom: 32 }}>Seleziona la modalità di vendita</p>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 20 }}>
-        {[
-          { id: 'veloce', icon: '⚡', label: 'Vendita Veloce', desc: 'Cerca e aggiungi articoli', color: '#3b82f6' },
-          { id: 'scan', icon: '📷', label: 'Scansione Barcode', desc: 'Leggi codici a barre', color: '#8b5cf6' },
-          { id: 'archivio', icon: '📋', label: 'Archivio Vendite', desc: 'Storico transazioni', color: '#10b981' },
-        ].map(m => (
-          <button key={m.id} onClick={() => setModalita(m.id as any)} style={{
-            background: '#fff', border: `2px solid ${m.color}20`, borderRadius: 16, padding: '28px 20px',
-            cursor: 'pointer', textAlign: 'left', transition: 'all 0.2s',
-            boxShadow: '0 2px 8px rgba(0,0,0,0.06)'
-          }}
-            onMouseEnter={e => { (e.currentTarget as HTMLElement).style.transform = 'translateY(-3px)'; (e.currentTarget as HTMLElement).style.boxShadow = `0 8px 24px ${m.color}30` }}
-            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.transform = ''; (e.currentTarget as HTMLElement).style.boxShadow = '0 2px 8px rgba(0,0,0,0.06)' }}>
-            <div style={{ fontSize: 40, marginBottom: 12 }}>{m.icon}</div>
-            <div style={{ fontWeight: 700, fontSize: 16, color: '#1e293b', marginBottom: 4 }}>{m.label}</div>
-            <div style={{ fontSize: 13, color: '#64748b' }}>{m.desc}</div>
-          </button>
-        ))}
-      </div>
-      {success && <div style={{ marginTop: 24, padding: '14px 20px', background: '#d1fae5', borderRadius: 10, color: '#065f46', fontWeight: 600 }}>{success}</div>}
-    </div>
-  )
-
-  // ── ARCHIVIO ──────────────────────────────────────────────────────────────
-  if (modalita === 'archivio') return (
-    <div style={{ padding: 24 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 24 }}>
-        <button onClick={() => setModalita('home')} style={{ background: '#f1f5f9', border: 'none', borderRadius: 8, padding: '8px 16px', cursor: 'pointer', fontWeight: 600 }}>← Indietro</button>
-        <h2 style={{ fontSize: 22, fontWeight: 800, color: '#1e293b', margin: 0 }}>📋 Archivio Vendite</h2>
-      </div>
-      <div style={{ background: '#fff', borderRadius: 12, overflow: 'hidden', boxShadow: '0 2px 8px rgba(0,0,0,0.08)' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-          <thead><tr style={{ background: '#f8fafc' }}>
-            {['Data', 'Cliente', 'Listino', 'Pagamento', 'Totale', 'Stato'].map(h => (
-              <th key={h} style={{ padding: '12px 16px', textAlign: 'left', fontSize: 12, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', borderBottom: '1px solid #e2e8f0' }}>{h}</th>
-            ))}
-          </tr></thead>
-          <tbody>
-            {vendite.map((v, i) => (
-              <tr key={v.id} style={{ borderBottom: '1px solid #f1f5f9', background: i % 2 === 0 ? '#fff' : '#fafafa' }}>
-                <td style={{ padding: '12px 16px', fontSize: 13 }}>{new Date(v.created_at).toLocaleDateString('it-IT')}</td>
-                <td style={{ padding: '12px 16px', fontSize: 13, fontWeight: 600 }}>{v.cliente_nome || 'Generico'}</td>
-                <td style={{ padding: '12px 16px', fontSize: 13 }}>{v.listino || 'Base'}</td>
-                <td style={{ padding: '12px 16px', fontSize: 13 }}>{v.pagamento || '-'}</td>
-                <td style={{ padding: '12px 16px', fontSize: 14, fontWeight: 700, color: '#059669' }}>€ {Number(v.totale || 0).toFixed(2)}</td>
-                <td style={{ padding: '12px 16px' }}><span style={{ background: '#d1fae5', color: '#065f46', borderRadius: 20, padding: '3px 10px', fontSize: 12, fontWeight: 600 }}>Completata</span></td>
-              </tr>
-            ))}
-            {vendite.length === 0 && <tr><td colSpan={6} style={{ padding: 40, textAlign: 'center', color: '#94a3b8' }}>Nessuna vendita registrata</td></tr>}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  )
-
-  // ── VENDITA (veloce + scan) ───────────────────────────────────────────────
   return (
-    <div style={{ display: 'flex', height: 'calc(100vh - 60px)', overflow: 'hidden', background: '#f8fafc' }}>
-
-      {/* COLONNA SINISTRA: articoli */}
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', borderRight: '1px solid #e2e8f0' }}>
-
-        {/* Header */}
-        <div style={{ padding: '16px 20px', background: '#fff', borderBottom: '1px solid #e2e8f0' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
-            <button onClick={() => setModalita('home')} style={{ background: '#f1f5f9', border: 'none', borderRadius: 8, padding: '6px 14px', cursor: 'pointer', fontWeight: 600, fontSize: 13 }}>← Indietro</button>
-            <h2 style={{ margin: 0, fontSize: 18, fontWeight: 800, color: '#1e293b' }}>
-              {modalita === 'scan' ? '📷 Scansione' : '⚡ Vendita Veloce'}
-            </h2>
-            <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
-              <button onClick={() => setModalita('veloce')} style={{ padding: '6px 14px', borderRadius: 8, border: 'none', background: modalita === 'veloce' ? '#3b82f6' : '#f1f5f9', color: modalita === 'veloce' ? '#fff' : '#374151', cursor: 'pointer', fontWeight: 600, fontSize: 13 }}>⚡ Veloce</button>
-              <button onClick={() => setModalita('scan')} style={{ padding: '6px 14px', borderRadius: 8, border: 'none', background: modalita === 'scan' ? '#8b5cf6' : '#f1f5f9', color: modalita === 'scan' ? '#fff' : '#374151', cursor: 'pointer', fontWeight: 600, fontSize: 13 }}>📷 Scan</button>
-            </div>
-          </div>
-
-          {/* Intestazione cliente */}
-          <div style={{ background: clienteSelezionato ? '#eff6ff' : '#f8fafc', border: `1px solid ${clienteSelezionato ? '#bfdbfe' : '#e2e8f0'}`, borderRadius: 10, padding: '10px 14px', marginBottom: 10 }}>
-            {clienteSelezionato ? (
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <div>
-                  <div style={{ fontWeight: 700, color: '#1e40af', fontSize: 15 }}>👤 {clienteSelezionato.nome}</div>
-                  <div style={{ fontSize: 12, color: '#64748b' }}>
-                    {clienteSelezionato.citta && `${clienteSelezionato.citta} · `}
-                    {clienteSelezionato.sconto > 0 && `Sconto: ${clienteSelezionato.sconto}% · `}
-                    Fido: €{Number(clienteSelezionato.fido || 0).toFixed(0)}
-                  </div>
+    <div style={{ height: 'calc(100vh - 64px)', display: 'flex', flexDirection: 'column', background: '#0f172a' }}>
+      {/* Header Cassa */}
+      <div style={{ background: '#1e293b', padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', borderBottom: '1px solid #334155' }}>
+        <div style={{ display: 'flex', gap: 4 }}>
+          <button onClick={() => setTab('cassa')} style={{ background: tab === 'cassa' ? '#3b82f6' : '#334155', color: '#fff', border: 'none', borderRadius: 8, padding: '8px 18px', cursor: 'pointer', fontWeight: 700, fontSize: 14 }}>Cassa</button>
+          <button onClick={() => { setTab('incasso'); if (clienteSelezionato) loadDocumentiCliente(clienteSelezionato.id) }} style={{ background: tab === 'incasso' ? '#10b981' : '#334155', color: '#fff', border: 'none', borderRadius: 8, padding: '8px 18px', cursor: 'pointer', fontWeight: 700, fontSize: 14 }}>Incassa Documento</button>
+        </div>
+        {/* Cliente */}
+        <div style={{ position: 'relative', flex: 1, minWidth: 200, maxWidth: 320 }}>
+          <input value={cercaCliente} onChange={e => {
+            setCercaCliente(e.target.value)
+            if (!e.target.value) { setClienteSelezionato(null); setSuggerimentiClienti([]); return }
+            const q = e.target.value.toLowerCase()
+            setSuggerimentiClienti(clienti.filter(c => c.nome?.toLowerCase().includes(q)).slice(0, 8))
+          }} style={{ width: '100%', background: '#0f172a', border: '1px solid #334155', borderRadius: 8, padding: '8px 12px', fontSize: 13, color: clienteSelezionato ? '#60a5fa' : '#94a3b8', outline: 'none', boxSizing: 'border-box' }} placeholder={clienteSelezionato ? clienteSelezionato.nome : 'Cliente (opzionale)...'} />
+          {suggerimentiClienti.length > 0 && (
+            <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, background: '#1e293b', border: '1px solid #334155', borderRadius: 8, zIndex: 100, maxHeight: 200, overflowY: 'auto', marginTop: 4 }}>
+              {suggerimentiClienti.map(c => (
+                <div key={c.id} onClick={() => { setClienteSelezionato(c); setCercaCliente(c.nome); setSuggerimentiClienti([]); setListino(c.listino || listino); if (tab === 'incasso') loadDocumentiCliente(c.id) }} style={{ padding: '10px 14px', cursor: 'pointer', color: '#e2e8f0', fontSize: 13, borderBottom: '1px solid #334155' }} onMouseEnter={e => (e.currentTarget.style.background = '#334155')} onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                  {c.nome}{c.piva ? ` · ${c.piva}` : ''}
                 </div>
-                <button onClick={() => setClienteSelezionato(null)} style={{ background: '#fee2e2', border: 'none', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', color: '#dc2626', fontWeight: 700, fontSize: 13 }}>✕ Rimuovi</button>
-              </div>
-            ) : (
-              <button onClick={() => setShowCercaCliente(true)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#3b82f6', fontWeight: 600, fontSize: 14, padding: 0 }}>
-                + Associa cliente (opzionale)
-              </button>
-            )}
-          </div>
-
-          {/* Listino e Pagamento */}
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span style={{ fontSize: 12, color: '#64748b', fontWeight: 600 }}>LISTINO:</span>
-              {LISTINI.map(l => (
-                <button key={l} onClick={() => setListino(l)} style={{
-                  padding: '4px 10px', borderRadius: 6, border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 600,
-                  background: listino === l ? '#3b82f6' : '#f1f5f9', color: listino === l ? '#fff' : '#374151'
-                }}>{l}</button>
               ))}
             </div>
+          )}
+        </div>
+        <select value={listino} onChange={e => setListino(e.target.value)} style={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 8, padding: '8px 10px', fontSize: 13, color: '#94a3b8', outline: 'none' }}>
+          {LISTINI.map(l => <option key={l}>{l}</option>)}
+        </select>
+        <select value={pagamento} onChange={e => setPagamento(e.target.value)} style={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 8, padding: '8px 10px', fontSize: 13, color: '#94a3b8', outline: 'none' }}>
+          {PAGAMENTI.map(p => <option key={p}>{p}</option>)}
+        </select>
+        {clienteSelezionato && <button onClick={() => { setClienteSelezionato(null); setCercaCliente('') }} style={{ background: '#334155', color: '#94a3b8', border: 'none', borderRadius: 8, padding: '8px 12px', cursor: 'pointer', fontSize: 13 }}>x Cliente</button>}
+      </div>
+
+      {tab === 'cassa' && (
+        <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
+          {/* Colonna sinistra: ricerca + lista articoli */}
+          <div style={{ width: 300, background: '#1e293b', borderRight: '1px solid #334155', display: 'flex', flexDirection: 'column' }}>
+            <div style={{ padding: 12, borderBottom: '1px solid #334155' }}>
+              <input ref={cercaArtRef} value={cercaArt} onChange={e => handleCercaArt(e.target.value)} style={{ width: '100%', background: '#0f172a', border: '1px solid #334155', borderRadius: 8, padding: '8px 12px', fontSize: 13, color: '#e2e8f0', outline: 'none', boxSizing: 'border-box' }} placeholder="Cerca articolo..." />
+            </div>
+            <div style={{ flex: 1, overflowY: 'auto' }}>
+              {cercaArt.length >= 2 && suggerimentiArt.map((s, i) => (
+                <div key={i} onClick={() => aggiungiArticolo(s.art, s.variante)} style={{ padding: '10px 14px', cursor: 'pointer', borderBottom: '1px solid #1e293b', background: '#1e293b' }} onMouseEnter={e => (e.currentTarget.style.background = '#334155')} onMouseLeave={e => (e.currentTarget.style.background = '#1e293b')}>
+                  <div style={{ color: '#e2e8f0', fontSize: 13, fontWeight: 500 }}>{s.art.nome}{s.variante ? ` - ${[s.variante.colore_nome, s.variante.misura_nome].filter(Boolean).join(' ')}` : ''}</div>
+                  <div style={{ color: '#60a5fa', fontSize: 12, marginTop: 2 }}>euro{getPrezzoListino(s.art, listino).toFixed(2)} · {s.art.iva}%</div>
+                </div>
+              ))}
+              {cercaArt.length < 2 && (
+                <div style={{ padding: 16 }}>
+                  <div style={{ color: '#64748b', fontSize: 12, marginBottom: 8 }}>Ultimi articoli:</div>
+                  {articoli.slice(0, 20).map(art => (
+                    <div key={art.id} onClick={() => aggiungiArticolo(art, null)} style={{ padding: '8px 10px', cursor: 'pointer', borderRadius: 6, marginBottom: 4 }} onMouseEnter={e => (e.currentTarget.style.background = '#334155')} onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                      <div style={{ color: '#e2e8f0', fontSize: 13 }}>{art.nome}</div>
+                      <div style={{ color: '#60a5fa', fontSize: 12 }}>euro{getPrezzoListino(art, listino).toFixed(2)}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
 
-          {/* Barcode o ricerca */}
-          {modalita === 'scan' ? (
-            <div style={{ marginTop: 10 }}>
-              <input ref={barcodeRef} value={barcode} onChange={e => setBarcode(e.target.value)} onKeyDown={handleBarcode}
-                placeholder="Scansiona barcode o digita codice + Invio..."
-                style={{ width: '100%', padding: '10px 14px', borderRadius: 8, border: `2px solid ${scanFeedback === 'ok' ? '#10b981' : scanFeedback === 'error' ? '#ef4444' : '#e2e8f0'}`, fontSize: 14, outline: 'none', boxSizing: 'border-box' }} />
-              {scanFeedback && <div style={{ marginTop: 6, fontSize: 13, color: scanFeedback === 'ok' ? '#10b981' : '#ef4444', fontWeight: 600 }}>
-                {scanFeedback === 'ok' ? `✅ ${ultimoScan}` : `❌ Articolo non trovato: ${ultimoScan}`}
-              </div>}
+          {/* Colonna centrale: righe scontrino */}
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+            {/* Barcode input */}
+            <div style={{ padding: '8px 12px', background: '#0f172a', borderBottom: '1px solid #334155', display: 'flex', alignItems: 'center', gap: 10 }}>
+              <span style={{ color: '#64748b', fontSize: 12, whiteSpace: 'nowrap' }}>EAN/Barcode:</span>
+              <input ref={barcodeInput} onKeyDown={handleBarcodeKeyDown} style={{ flex: 1, background: '#1e293b', border: '1px solid #334155', borderRadius: 8, padding: '7px 12px', fontSize: 14, color: '#e2e8f0', outline: 'none' }} placeholder="Scansiona o digita EAN + INVIO..." />
+              {error && <span style={{ color: '#ef4444', fontSize: 12 }}>{error}</span>}
+            </div>
+
+            {/* Lista righe */}
+            <div style={{ flex: 1, overflowY: 'auto' }}>
+              {righe.length === 0 ? (
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#334155' }}>
+                  <div style={{ fontSize: 60, marginBottom: 12 }}>🛒</div>
+                  <div style={{ fontSize: 16, fontWeight: 600 }}>Cassa pronta</div>
+                  <div style={{ fontSize: 13, marginTop: 4 }}>Scansiona un articolo o cercalo a sinistra</div>
+                </div>
+              ) : (
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr style={{ background: '#1e293b', position: 'sticky', top: 0 }}>
+                      {['Articolo', 'Qta', 'Prezzo', 'Sc%', 'Importo', ''].map(h => (
+                        <th key={h} style={{ padding: '8px 12px', textAlign: 'left', fontSize: 11, fontWeight: 600, color: '#64748b', borderBottom: '1px solid #334155' }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {righe.map((r, idx) => (
+                      <tr key={idx} style={{ borderBottom: '1px solid #1e293b', background: idx % 2 === 0 ? '#0f172a' : '#111827' }}>
+                        <td style={{ padding: '10px 12px' }}>
+                          <div style={{ color: '#e2e8f0', fontSize: 14, fontWeight: 500 }}>{r.descrizione}</div>
+                          {r.ean && <div style={{ color: '#64748b', fontSize: 11, fontFamily: 'monospace' }}>{r.ean}</div>}
+                        </td>
+                        <td style={{ padding: '8px 12px' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <button onClick={() => aggiornaQta(idx, -1)} style={{ background: '#334155', color: '#fff', border: 'none', borderRadius: 6, width: 28, height: 28, cursor: 'pointer', fontSize: 16, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>-</button>
+                            <input type="number" value={r.qta} onChange={e => setQta(idx, Number(e.target.value))} style={{ width: 50, background: '#1e293b', border: '1px solid #334155', borderRadius: 6, padding: '4px 6px', fontSize: 14, color: '#e2e8f0', textAlign: 'center', outline: 'none' }} />
+                            <button onClick={() => aggiornaQta(idx, 1)} style={{ background: '#334155', color: '#fff', border: 'none', borderRadius: 6, width: 28, height: 28, cursor: 'pointer', fontSize: 16, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>+</button>
+                          </div>
+                        </td>
+                        <td style={{ padding: '8px 12px' }}>
+                          <input type="number" step="0.01" value={r.prezzo} onChange={e => { const nr = [...righe]; nr[idx] = calcolaRiga({ ...nr[idx], prezzo: Number(e.target.value) }); setRighe(nr) }} style={{ width: 80, background: '#1e293b', border: '1px solid #334155', borderRadius: 6, padding: '4px 8px', fontSize: 14, color: '#60a5fa', outline: 'none' }} />
+                        </td>
+                        <td style={{ padding: '8px 12px' }}>
+                          <input type="number" step="0.1" value={r.sconto || 0} onChange={e => { const nr = [...righe]; nr[idx] = calcolaRiga({ ...nr[idx], sconto: Number(e.target.value) }); setRighe(nr) }} style={{ width: 55, background: '#1e293b', border: '1px solid #334155', borderRadius: 6, padding: '4px 8px', fontSize: 14, color: '#f59e0b', outline: 'none' }} />
+                        </td>
+                        <td style={{ padding: '8px 12px', fontSize: 15, fontWeight: 700, color: '#10b981', whiteSpace: 'nowrap' }}>euro{(r.importo || 0).toFixed(2)}</td>
+                        <td style={{ padding: '8px 12px' }}>
+                          <button onClick={() => rimuoviRiga(idx)} style={{ background: '#7f1d1d', color: '#fca5a5', border: 'none', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 16 }}>x</button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
+
+          {/* Colonna destra: totale e pagamento */}
+          <div style={{ width: 260, background: '#1e293b', borderLeft: '1px solid #334155', display: 'flex', flexDirection: 'column', padding: 16 }}>
+            {success && <div style={{ background: '#064e3b', color: '#6ee7b7', padding: 12, borderRadius: 8, marginBottom: 12, fontSize: 13, textAlign: 'center' }}>{success}</div>}
+            <div style={{ flex: 1 }}>
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ color: '#64748b', fontSize: 12, marginBottom: 4 }}>Articoli</div>
+                <div style={{ color: '#e2e8f0', fontSize: 20, fontWeight: 700 }}>{nArticoli} pz</div>
+              </div>
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ color: '#64748b', fontSize: 12, marginBottom: 4 }}>Righe</div>
+                <div style={{ color: '#e2e8f0', fontSize: 20, fontWeight: 700 }}>{righe.length}</div>
+              </div>
+              {clienteSelezionato && (
+                <div style={{ background: '#0f172a', borderRadius: 8, padding: 12, marginBottom: 16 }}>
+                  <div style={{ color: '#60a5fa', fontSize: 12, fontWeight: 600 }}>Cliente</div>
+                  <div style={{ color: '#e2e8f0', fontSize: 14, fontWeight: 600, marginTop: 2 }}>{clienteSelezionato.nome}</div>
+                  <div style={{ color: '#64748b', fontSize: 12 }}>Listino: {listino}</div>
+                </div>
+              )}
+              <div style={{ background: '#0f172a', borderRadius: 12, padding: 16, marginBottom: 16 }}>
+                <div style={{ color: '#64748b', fontSize: 13, marginBottom: 8 }}>TOTALE</div>
+                <div style={{ color: '#10b981', fontSize: 36, fontWeight: 800, lineHeight: 1 }}>euro{totale.toFixed(2)}</div>
+                <div style={{ color: '#64748b', fontSize: 12, marginTop: 6 }}>{pagamento}</div>
+              </div>
+              <textarea value={note} onChange={e => setNote(e.target.value)} style={{ width: '100%', background: '#0f172a', border: '1px solid #334155', borderRadius: 8, padding: '8px 10px', fontSize: 13, color: '#94a3b8', outline: 'none', resize: 'none', height: 60, boxSizing: 'border-box' }} placeholder="Note..." />
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <button onClick={() => { if (righe.length === 0) return; setImportoPagato(totale.toFixed(2)); setModalPagamento(true) }} disabled={righe.length === 0} style={{ background: righe.length > 0 ? '#10b981' : '#1e293b', color: righe.length > 0 ? '#fff' : '#334155', border: 'none', borderRadius: 10, padding: '14px', cursor: righe.length > 0 ? 'pointer' : 'default', fontWeight: 800, fontSize: 18 }}>
+                PAGA euro{totale.toFixed(2)}
+              </button>
+              <button onClick={() => setRighe([])} style={{ background: '#7f1d1d', color: '#fca5a5', border: 'none', borderRadius: 8, padding: '10px', cursor: 'pointer', fontWeight: 600, fontSize: 14 }}>Annulla Scontrino</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {tab === 'incasso' && (
+        <div style={{ flex: 1, overflowY: 'auto', padding: 20 }}>
+          {!clienteSelezionato ? (
+            <div style={{ textAlign: 'center', padding: 60, color: '#64748b' }}>
+              <div style={{ fontSize: 48, marginBottom: 12 }}>👤</div>
+              <div style={{ fontSize: 16, fontWeight: 600, color: '#94a3b8' }}>Seleziona un cliente in alto per vedere i documenti da incassare</div>
             </div>
           ) : (
-            <input value={cerca} onChange={e => setCerca(e.target.value)}
-              placeholder="🔍 Cerca articolo per nome, codice o EAN..."
-              style={{ marginTop: 10, width: '100%', padding: '10px 14px', borderRadius: 8, border: '1px solid #e2e8f0', fontSize: 14, outline: 'none', boxSizing: 'border-box' }} />
-          )}
-        </div>
-
-        {/* Lista articoli */}
-        <div style={{ flex: 1, overflowY: 'auto', padding: '12px 16px' }}>
-          {modalita === 'veloce' && (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: 10 }}>
-              {artFiltrati.slice(0, 60).map(art => {
-                const prezzo = getPrezzoListino(art)
-                return (
-                  <button key={art.id} onClick={() => aggiungiAlCarrello(art)} style={{
-                    background: '#fff', border: '1px solid #e2e8f0', borderRadius: 10, padding: '12px 10px',
-                    cursor: 'pointer', textAlign: 'left', transition: 'all 0.15s'
-                  }}
-                    onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = '#3b82f6'; (e.currentTarget as HTMLElement).style.background = '#eff6ff' }}
-                    onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = '#e2e8f0'; (e.currentTarget as HTMLElement).style.background = '#fff' }}>
-                    <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 2 }}>{art.codice}</div>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: '#1e293b', marginBottom: 6, lineHeight: 1.3 }}>{art.nome}</div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <span style={{ fontSize: 15, fontWeight: 800, color: '#059669' }}>€{prezzo.toFixed(2)}</span>
-                      <span style={{ fontSize: 11, color: art.stock > 0 ? '#10b981' : '#ef4444' }}>
-                        {art.stock > 0 ? `${art.stock} pz` : 'Esaurito'}
-                      </span>
+            <div>
+              <h3 style={{ color: '#e2e8f0', marginBottom: 16 }}>Documenti aperti - {clienteSelezionato.nome}</h3>
+              {documentiAperti.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: 40, color: '#64748b' }}>Nessun documento aperto per questo cliente</div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  {documentiAperti.map(doc => (
+                    <div key={doc.id} style={{ background: '#1e293b', borderRadius: 12, padding: 16, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
+                      <div>
+                        <div style={{ color: '#e2e8f0', fontWeight: 700, fontSize: 15 }}>{doc.numero_doc}</div>
+                        <div style={{ color: '#64748b', fontSize: 13, marginTop: 2 }}>{doc.tipo} · {doc.data_documento ? new Date(doc.data_documento).toLocaleDateString('it-IT') : '--'} · {doc.stato}</div>
+                        {doc.data_scadenza && <div style={{ color: new Date(doc.data_scadenza) < new Date() ? '#ef4444' : '#f59e0b', fontSize: 12, marginTop: 2 }}>Scad: {new Date(doc.data_scadenza).toLocaleDateString('it-IT')}</div>}
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                        <div style={{ color: '#10b981', fontSize: 22, fontWeight: 800 }}>euro{Number(doc.totale_documento || 0).toFixed(2)}</div>
+                        <button onClick={() => incassaDocumento(doc)} disabled={saving} style={{ background: '#10b981', color: '#fff', border: 'none', borderRadius: 8, padding: '10px 20px', cursor: 'pointer', fontWeight: 700, fontSize: 14 }}>INCASSA</button>
+                      </div>
                     </div>
-                  </button>
-                )
-              })}
-              {artFiltrati.length === 0 && <div style={{ gridColumn: '1/-1', textAlign: 'center', padding: 40, color: '#94a3b8' }}>Nessun articolo trovato</div>}
-            </div>
-          )}
-          {modalita === 'scan' && (
-            <div style={{ textAlign: 'center', padding: '60px 20px', color: '#94a3b8' }}>
-              <div style={{ fontSize: 64, marginBottom: 16 }}>📷</div>
-              <div style={{ fontSize: 16, fontWeight: 600 }}>Pronto per la scansione</div>
-              <div style={{ fontSize: 13, marginTop: 8 }}>Posiziona il cursore nel campo sopra e scansiona il barcode</div>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* COLONNA DESTRA: carrello */}
-      <div style={{ width: 380, display: 'flex', flexDirection: 'column', background: '#fff' }}>
-
-        {/* Header carrello */}
-        <div style={{ padding: '16px 20px', borderBottom: '1px solid #e2e8f0', background: '#1e293b' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <h3 style={{ margin: 0, color: '#fff', fontWeight: 700 }}>🛒 Carrello ({carrello.length})</h3>
-            {carrello.length > 0 && <button onClick={() => setCarrello([])} style={{ background: '#ef4444', border: 'none', borderRadius: 6, padding: '4px 10px', color: '#fff', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>Svuota</button>}
-          </div>
-          {clienteSelezionato && <div style={{ marginTop: 6, fontSize: 12, color: '#94a3b8' }}>👤 {clienteSelezionato.nome}</div>}
-        </div>
-
-        {/* Righe carrello */}
-        <div style={{ flex: 1, overflowY: 'auto', padding: '8px 0' }}>
-          {carrello.length === 0 ? (
-            <div style={{ textAlign: 'center', padding: '60px 20px', color: '#94a3b8' }}>
-              <div style={{ fontSize: 40, marginBottom: 12 }}>🛒</div>
-              <div>Carrello vuoto</div>
-            </div>
-          ) : carrello.map(r => (
-            <div key={r.id} style={{ padding: '10px 16px', borderBottom: '1px solid #f1f5f9' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 6 }}>
-                <div style={{ flex: 1, marginRight: 8 }}>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: '#1e293b' }}>{r.nome}</div>
-                  <div style={{ fontSize: 11, color: '#94a3b8' }}>{r.codice}{r.colore ? ` · ${r.colore}` : ''}</div>
+                  ))}
                 </div>
-                <button onClick={() => rimuoviRiga(r.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#ef4444', fontSize: 16, padding: 0 }}>✕</button>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <button onClick={() => aggiornaQta(r.id, -1)} style={{ width: 28, height: 28, borderRadius: 6, border: '1px solid #e2e8f0', background: '#f8fafc', cursor: 'pointer', fontWeight: 700 }}>−</button>
-                <span style={{ minWidth: 30, textAlign: 'center', fontWeight: 700, fontSize: 14 }}>{r.qta}</span>
-                <button onClick={() => aggiornaQta(r.id, 1)} style={{ width: 28, height: 28, borderRadius: 6, border: '1px solid #e2e8f0', background: '#f8fafc', cursor: 'pointer', fontWeight: 700 }}>+</button>
-                <span style={{ fontSize: 12, color: '#64748b', marginLeft: 4 }}>× €</span>
-                <input type="number" value={r.prezzo} onChange={e => aggiornaPrezzoRiga(r.id, Number(e.target.value))}
-                  style={{ width: 60, padding: '3px 6px', borderRadius: 6, border: '1px solid #e2e8f0', fontSize: 12, textAlign: 'right' }} />
-                <span style={{ fontSize: 11, color: '#64748b' }}>Sc%</span>
-                <input type="number" value={r.sconto} onChange={e => aggiornaScontoRiga(r.id, Number(e.target.value))}
-                  style={{ width: 40, padding: '3px 6px', borderRadius: 6, border: '1px solid #e2e8f0', fontSize: 12, textAlign: 'right' }} />
-                <span style={{ marginLeft: 'auto', fontWeight: 700, color: '#059669', fontSize: 14 }}>€{r.totale.toFixed(2)}</span>
-              </div>
-            </div>
-          ))}
-        </div>
-
-        {/* Totali e pagamento */}
-        <div style={{ borderTop: '2px solid #e2e8f0', padding: '16px 20px', background: '#f8fafc' }}>
-          {/* Sconto totale */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-            <span style={{ fontSize: 13, color: '#64748b', flex: 1 }}>Sconto totale %</span>
-            <input type="number" value={scontoTotale} onChange={e => setScontoTotale(Number(e.target.value))} min={0} max={100}
-              style={{ width: 60, padding: '4px 8px', borderRadius: 6, border: '1px solid #e2e8f0', fontSize: 13, textAlign: 'right' }} />
-          </div>
-
-          {/* Riepilogo */}
-          <div style={{ background: '#fff', borderRadius: 10, padding: '12px 14px', marginBottom: 12, border: '1px solid #e2e8f0' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: '#64748b', marginBottom: 4 }}>
-              <span>Imponibile</span><span>€{totaleImponibile.toFixed(2)}</span>
-            </div>
-            {scontoTotale > 0 && <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: '#ef4444', marginBottom: 4 }}>
-              <span>Sconto ({scontoTotale}%)</span><span>-€{scontoEuro.toFixed(2)}</span>
-            </div>}
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: '#64748b', marginBottom: 4 }}>
-              <span>IVA 22%</span><span>€{totaleIva.toFixed(2)}</span>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 18, fontWeight: 800, color: '#1e293b', borderTop: '1px solid #e2e8f0', paddingTop: 8, marginTop: 4 }}>
-              <span>TOTALE</span><span>€{totaleDovuto.toFixed(2)}</span>
-            </div>
-          </div>
-
-          {/* Metodo pagamento */}
-          <div style={{ marginBottom: 12 }}>
-            <div style={{ fontSize: 12, color: '#64748b', fontWeight: 600, marginBottom: 6 }}>PAGAMENTO</div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 6 }}>
-              {PAGAMENTI.map(p => (
-                <button key={p.id} onClick={() => setPagamento(p.id)} style={{
-                  padding: '6px 4px', borderRadius: 8, border: `2px solid ${pagamento === p.id ? '#3b82f6' : '#e2e8f0'}`,
-                  background: pagamento === p.id ? '#eff6ff' : '#fff', cursor: 'pointer',
-                  fontSize: 11, fontWeight: 600, color: pagamento === p.id ? '#1d4ed8' : '#374151', textAlign: 'center'
-                }}>
-                  <div style={{ fontSize: 16 }}>{p.icon}</div>
-                  <div style={{ fontSize: 10 }}>{p.label}</div>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Contanti: calcola resto */}
-          {pagamento === 'contanti' && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, background: '#fff', borderRadius: 8, padding: '8px 12px', border: '1px solid #e2e8f0' }}>
-              <span style={{ fontSize: 13, color: '#64748b' }}>Contanti dati: €</span>
-              <input type="number" value={contantiDati || ''} onChange={e => setContantiDati(Number(e.target.value))}
-                style={{ flex: 1, padding: '4px 8px', borderRadius: 6, border: '1px solid #e2e8f0', fontSize: 14, fontWeight: 700 }} />
-              {contantiDati > 0 && <span style={{ fontSize: 14, fontWeight: 700, color: '#059669' }}>Resto: €{resto.toFixed(2)}</span>}
+              )}
             </div>
           )}
-
-          {/* Note */}
-          <button onClick={() => setShowNota(!showNota)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#64748b', fontSize: 13, marginBottom: 8, padding: 0 }}>
-            {showNota ? '▼' : '▶'} Note vendita
-          </button>
-          {showNota && <textarea value={note} onChange={e => setNote(e.target.value)} placeholder="Note..." rows={2}
-            style={{ width: '100%', borderRadius: 8, border: '1px solid #e2e8f0', padding: '8px 10px', fontSize: 13, resize: 'none', marginBottom: 8, boxSizing: 'border-box' }} />}
-
-          {error && <div style={{ background: '#fee2e2', color: '#dc2626', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 8 }}>{error}</div>}
-
-          <button onClick={completaVendita} disabled={loading || carrello.length === 0} style={{
-            width: '100%', padding: '14px', borderRadius: 10, border: 'none',
-            background: carrello.length === 0 ? '#e2e8f0' : '#10b981',
-            color: carrello.length === 0 ? '#94a3b8' : '#fff',
-            fontWeight: 800, fontSize: 16, cursor: carrello.length === 0 ? 'not-allowed' : 'pointer',
-            transition: 'all 0.2s'
-          }}>
-            {loading ? '⏳ Elaborazione...' : `✅ INCASSA €${totaleDovuto.toFixed(2)}`}
-          </button>
+          {success && <div style={{ background: '#064e3b', color: '#6ee7b7', padding: 14, borderRadius: 8, marginTop: 16, textAlign: 'center', fontWeight: 600 }}>{success}</div>}
         </div>
-      </div>
+      )}
 
-      {/* MODAL CERCA CLIENTE */}
-      {showCercaCliente && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <div style={{ background: '#fff', borderRadius: 16, padding: 24, width: 480, maxHeight: '70vh', display: 'flex', flexDirection: 'column' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-              <h3 style={{ margin: 0, fontWeight: 800 }}>Seleziona Cliente</h3>
-              <button onClick={() => setShowCercaCliente(false)} style={{ background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: '#64748b' }}>✕</button>
+      {/* Modal pagamento */}
+      {modalPagamento && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
+          <div style={{ background: '#1e293b', borderRadius: 16, padding: 32, width: 360, boxShadow: '0 20px 60px rgba(0,0,0,0.5)' }}>
+            <h2 style={{ color: '#e2e8f0', margin: '0 0 24px', fontSize: 22 }}>Pagamento</h2>
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ color: '#64748b', fontSize: 13, marginBottom: 8 }}>Modalita</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                {PAGAMENTI.map(p => <button key={p} onClick={() => setPagamento(p)} style={{ background: pagamento === p ? '#3b82f6' : '#334155', color: '#fff', border: 'none', borderRadius: 8, padding: '8px 14px', cursor: 'pointer', fontWeight: pagamento === p ? 700 : 400, fontSize: 13 }}>{p}</button>)}
+              </div>
             </div>
-            <input value={cercaCliente} onChange={e => setCercaCliente(e.target.value)} placeholder="🔍 Cerca per nome o codice..."
-              style={{ padding: '10px 14px', borderRadius: 8, border: '1px solid #e2e8f0', fontSize: 14, marginBottom: 12, outline: 'none' }} autoFocus />
-            <div style={{ overflowY: 'auto', flex: 1 }}>
-              {clientiFiltrati.slice(0, 30).map(c => (
-                <button key={c.id} onClick={() => { setClienteSelezionato(c); setShowCercaCliente(false); setCercaCliente('') }}
-                  style={{ width: '100%', padding: '12px 16px', background: '#f8fafc', border: 'none', borderRadius: 8, cursor: 'pointer', textAlign: 'left', marginBottom: 6, transition: 'background 0.15s' }}
-                  onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = '#eff6ff'}
-                  onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = '#f8fafc'}>
-                  <div style={{ fontWeight: 700, color: '#1e293b' }}>{c.nome}</div>
-                  <div style={{ fontSize: 12, color: '#64748b' }}>{c.codice && `Cod: ${c.codice} · `}{c.citta || ''}{c.sconto > 0 ? ` · Sconto: ${c.sconto}%` : ''}</div>
-                </button>
-              ))}
-              {clientiFiltrati.length === 0 && <div style={{ textAlign: 'center', padding: 30, color: '#94a3b8' }}>Nessun cliente trovato</div>}
+            <div style={{ marginBottom: 20 }}>
+              <div style={{ color: '#64748b', fontSize: 13, marginBottom: 8 }}>Importo ricevuto</div>
+              <input type="number" step="0.01" value={importoPagato} onChange={e => setImportoPagato(e.target.value)} style={{ width: '100%', background: '#0f172a', border: '2px solid #3b82f6', borderRadius: 8, padding: '12px 16px', fontSize: 24, color: '#e2e8f0', outline: 'none', boxSizing: 'border-box', textAlign: 'right' }} autoFocus />
+            </div>
+            <div style={{ background: '#0f172a', borderRadius: 8, padding: 14, marginBottom: 20 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+                <span style={{ color: '#64748b', fontSize: 14 }}>Totale</span>
+                <span style={{ color: '#e2e8f0', fontSize: 16, fontWeight: 700 }}>euro{totale.toFixed(2)}</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span style={{ color: '#64748b', fontSize: 14 }}>Resto</span>
+                <span style={{ color: resto >= 0 ? '#10b981' : '#ef4444', fontSize: 20, fontWeight: 800 }}>euro{resto.toFixed(2)}</span>
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 10 }}>
+              <button onClick={() => setModalPagamento(false)} style={{ flex: 1, background: '#334155', color: '#94a3b8', border: 'none', borderRadius: 8, padding: 14, cursor: 'pointer', fontWeight: 600 }}>Annulla</button>
+              <button onClick={completaVendita} disabled={saving} style={{ flex: 2, background: '#10b981', color: '#fff', border: 'none', borderRadius: 8, padding: 14, cursor: 'pointer', fontWeight: 800, fontSize: 16 }}>{saving ? 'Salvataggio...' : 'CONFERMA VENDITA'}</button>
             </div>
           </div>
         </div>
