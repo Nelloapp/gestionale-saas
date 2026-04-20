@@ -1,6 +1,6 @@
 'use client'
 import { useState, useEffect } from 'react'
-import { supabase } from '../../../lib/supabase'
+import { supabase, supabaseAdmin } from '../../../lib/supabase'
 import { useAuth } from '../../../lib/useAuth'
 
 type Profilo = {
@@ -50,7 +50,7 @@ export default function UtentiPage() {
 
   async function loadUtenti() {
     setLoading(true)
-    const { data, error } = await supabase.from('profili').select('*').order('created_at', { ascending: true })
+    const { data, error } = await supabaseAdmin.from('profili').select('*').order('created_at', { ascending: true })
     if (error) setError('Errore caricamento: ' + error.message)
     else setUtenti(data || [])
     setLoading(false)
@@ -61,14 +61,14 @@ export default function UtentiPage() {
       setError('Solo un Super Admin può assegnare il ruolo Super Admin')
       return
     }
-    const { error } = await supabase.from('profili').update({ ruolo: nuovoRuolo, updated_at: new Date().toISOString() }).eq('id', id)
+    const { error } = await supabaseAdmin.from('profili').update({ ruolo: nuovoRuolo, updated_at: new Date().toISOString() }).eq('id', id)
     if (error) setError('Errore: ' + error.message)
     else { setSuccess('Ruolo aggiornato!'); setEditingId(null); loadUtenti() }
   }
 
   async function toggleAttivo(id: string, attivo: boolean) {
     if (id === myProfilo?.id) { setError('Non puoi disattivare te stesso'); return }
-    const { error } = await supabase.from('profili').update({ attivo: !attivo }).eq('id', id)
+    const { error } = await supabaseAdmin.from('profili').update({ attivo: !attivo }).eq('id', id)
     if (error) setError('Errore: ' + error.message)
     else { setSuccess(attivo ? 'Utente disattivato' : 'Utente attivato'); loadUtenti() }
   }
@@ -77,7 +77,7 @@ export default function UtentiPage() {
     if (!invitaEmail.trim()) { setError('Email obbligatoria'); return }
     setInvitando(true); setError(''); setSuccess('')
     // Crea profilo manualmente (in produzione si userebbe Supabase Admin API per inviti email)
-    const { error } = await supabase.from('profili').insert([{
+    const { error } = await supabaseAdmin.from('profili').insert([{
       id: crypto.randomUUID(),
       email: invitaEmail.trim(),
       nome: invitaNome.trim(),

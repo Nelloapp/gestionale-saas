@@ -1,6 +1,6 @@
 'use client'
 import { useState, useEffect, createContext, useContext } from 'react'
-import { supabase } from './supabase'
+import { supabase, supabaseAdmin } from './supabase'
 
 type Ruolo = 'super_admin' | 'admin' | 'manager' | 'cassiere' | 'magazziniere' | 'commerciale'
 
@@ -67,7 +67,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [])
 
   async function loadProfilo(userId: string) {
-    const { data } = await supabase.from('profili').select('*').eq('id', userId).single()
+    const { data } = await supabaseAdmin.from('profili').select('*').eq('id', userId).single()
     setProfilo(data)
     setLoading(false)
   }

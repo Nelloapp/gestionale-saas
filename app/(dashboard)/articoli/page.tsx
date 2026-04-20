@@ -1,11 +1,7 @@
 'use client'
 import { useState, useEffect } from 'react'
-import { createClient } from '@supabase/supabase-js'
+import { supabase, supabaseAdmin } from '../../../lib/supabase'
 
-const supabase = createClient(
-  'https://iwvesqajdjmsuxyvplxo.supabase.co',
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Iml3dmVzcWFqZGptc3V4eXZwbHhvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY1MjQ1MzAsImV4cCI6MjA5MjEwMDUzMH0.9VjwWEKzv2kUSE2eHkKg0NbwZImtEytc3V05HAG7rxw'
-)
 
 type Articolo = {
   id?: string; codice: string; ean: string; codice_fornitore: string; nome: string;
@@ -41,7 +37,7 @@ export default function ArticoliPage() {
 
   async function loadArticoli() {
     setLoading(true)
-    const { data, error } = await supabase.from('articoli').select('*').order('created_at', { ascending: false })
+    const { data, error } = await supabaseAdmin.from('articoli').select('*').order('created_at', { ascending: false })
     if (error) setError('Errore caricamento: ' + error.message)
     else setArticoli(data || [])
     setLoading(false)
@@ -68,12 +64,12 @@ export default function ArticoliPage() {
     if (!form.codice.trim()) { setError('Il codice è obbligatorio'); return }
     setSaving(true); setError(''); setSuccess('')
     const { data: { user } } = await supabase.auth.getUser()
-    const payload = { ...form, user_id: user?.id }
+    const payload = { ...form, user_id: user?.id || 'f1e0512f-0ecd-41b5-a29a-33fc9f832528' }
     let result
     if (editId) {
-      result = await supabase.from('articoli').update(payload).eq('id', editId)
+      result = await supabaseAdmin.from('articoli').update(payload).eq('id', editId)
     } else {
-      result = await supabase.from('articoli').insert([payload])
+      result = await supabaseAdmin.from('articoli').insert([payload])
     }
     if (result.error) { setError('Errore salvataggio: ' + result.error.message) }
     else { setSuccess(editId ? 'Articolo aggiornato!' : 'Articolo salvato!'); setShowForm(false); setForm(emptyForm); setEditId(null); loadArticoli() }
@@ -82,7 +78,7 @@ export default function ArticoliPage() {
 
   async function eliminaArticolo(id: string) {
     if (!confirm('Eliminare questo articolo?')) return
-    const { error } = await supabase.from('articoli').delete().eq('id', id)
+    const { error } = await supabaseAdmin.from('articoli').delete().eq('id', id)
     if (error) setError('Errore eliminazione: ' + error.message)
     else { setSuccess('Articolo eliminato'); loadArticoli() }
   }

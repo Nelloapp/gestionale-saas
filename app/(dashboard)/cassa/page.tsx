@@ -1,11 +1,7 @@
 'use client'
 import { useState, useEffect, useRef } from 'react'
-import { createClient } from '@supabase/supabase-js'
+import { supabase, supabaseAdmin } from '../../../lib/supabase'
 
-const supabase = createClient(
-  'https://iwvesqajdjmsuxyvplxo.supabase.co',
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Iml3dmVzcWFqZGptc3V4eXZwbHhvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY1MjQ1MzAsImV4cCI6MjA5MjEwMDUzMH0.9VjwWEKzv2kUSE2eHkKg0NbwZImtEytc3V05HAG7rxw'
-)
 
 type RigaCarrello = { id: string; articolo_id?: string; codice: string; nome: string; qta: number; prezzo: number; sconto: number; iva: number; totale: number }
 type Conto = { id: string; nome: string; tipo: string; stato: string; righe: RigaCarrello[] }
@@ -36,25 +32,25 @@ export default function CassaPage() {
   useEffect(() => { if (modalita === 'scan' && barcodeRef.current) barcodeRef.current.focus() }, [modalita])
 
   async function loadArticoli() {
-    const { data } = await supabase.from('articoli').select('*').eq('stato', 'attivo')
+    const { data } = await supabaseAdmin.from('articoli').select('*').eq('stato', 'attivo')
     setArticoli(data || [])
   }
   async function loadClienti() {
-    const { data } = await supabase.from('clienti').select('*').eq('stato', 'attivo')
+    const { data } = await supabaseAdmin.from('clienti').select('*').eq('stato', 'attivo')
     setClienti(data || [])
   }
   async function loadConti() {
-    const { data: contiData } = await supabase.from('conti_cassa').select('*').eq('stato', 'aperto').order('created_at', { ascending: false })
+    const { data: contiData } = await supabaseAdmin.from('conti_cassa').select('*').eq('stato', 'aperto').order('created_at', { ascending: false })
     if (contiData) {
       const contiConRighe = await Promise.all(contiData.map(async (c) => {
-        const { data: righe } = await supabase.from('conti_righe').select('*').eq('conto_id', c.id)
+        const { data: righe } = await supabaseAdmin.from('conti_righe').select('*').eq('conto_id', c.id)
         return { ...c, righe: (righe || []).map(r => ({ id: r.id, articolo_id: r.articolo_id, codice: r.codice, nome: r.nome, qta: r.qta, prezzo: r.prezzo_unitario, sconto: r.sconto, iva: 22, totale: r.totale })) }
       }))
       setConti(contiConRighe)
     }
   }
   async function loadVendite() {
-    const { data } = await supabase.from('vendite').select('*').order('created_at', { ascending: false }).limit(50)
+    const { data } = await supabaseAdmin.from('vendite').select('*').order('created_at', { ascending: false }).limit(50)
     setVendite(data || [])
   }
 
@@ -106,14 +102,14 @@ export default function CassaPage() {
     setLoading(true); setError('')
     const { data: { user } } = await supabase.auth.getUser()
     const numero = tipo.toUpperCase() + '-' + Date.now().toString().slice(-6)
-    const { data: vendita, error: ve } = await supabase.from('vendite').insert([{
+    const { data: vendita, error: ve } = await supabaseAdmin.from('vendite').insert([{
       user_id: user?.id, numero, tipo, data: new Date().toISOString().split('T')[0],
       cliente_id: clienteSelezionato?.id || null, cliente_nome: clienteSelezionato?.nome || null,
       modalita_cassa: modalita, subtotale, sconto_perc: scontoTotale, sconto_importo: scontoImporto,
       totale, iva_totale: totale - totale / (1 + 0.22), pagamento, stato: 'pagata'
     }]).select().single()
     if (ve) { setError('Errore: ' + ve.message); setLoading(false); return }
-    await supabase.from('vendite_righe').insert(carrello.map(r => ({
+    await supabaseAdmin.from('vendite_righe').insert(carrello.map(r => ({
       vendita_id: vendita.id, articolo_id: r.articolo_id || null, codice: r.codice,
       nome: r.nome, qta: r.qta, prezzo_unitario: r.prezzo, sconto: r.sconto, iva: r.iva, totale: r.totale
     })))
@@ -121,7 +117,7 @@ export default function CassaPage() {
     for (const r of carrello) {
       if (r.articolo_id) {
         const art = articoli.find(a => a.id === r.articolo_id)
-        if (art) await supabase.from('articoli').update({ stock: Math.max(0, art.stock - r.qta) }).eq('id', r.articolo_id)
+        if (art) await supabaseAdmin.from('articoli').update({ stock: Math.max(0, art.stock - r.qta) }).eq('id', r.articolo_id)
       }
     }
     setSuccess(`${tipo.toUpperCase()} ${numero} emessa! Totale: €${totale.toFixed(2)}`)
@@ -132,7 +128,7 @@ export default function CassaPage() {
 
   async function apriNuovoConto(nome: string, tipo: string) {
     const { data: { user } } = await supabase.auth.getUser()
-    const { data } = await supabase.from('conti_cassa').insert([{ user_id: user?.id, nome, tipo, stato: 'aperto' }]).select().single()
+    const { data } = await supabaseAdmin.from('conti_cassa').insert([{ user_id: user?.id, nome, tipo, stato: 'aperto' }]).select().single()
     if (data) { await loadConti(); setContoAttivo(data.id) }
   }
 
@@ -143,9 +139,9 @@ export default function CassaPage() {
     const rigaEsistente = conto?.righe.find(r => r.articolo_id === art.id)
     if (rigaEsistente) {
       const nuovaQta = rigaEsistente.qta + 1
-      await supabase.from('conti_righe').update({ qta: nuovaQta, totale: nuovaQta * prezzo }).eq('id', rigaEsistente.id)
+      await supabaseAdmin.from('conti_righe').update({ qta: nuovaQta, totale: nuovaQta * prezzo }).eq('id', rigaEsistente.id)
     } else {
-      await supabase.from('conti_righe').insert([{ conto_id: contoId, articolo_id: art.id, codice: art.codice, nome: art.nome, qta: 1, prezzo_unitario: prezzo, sconto: 0, totale: prezzo }])
+      await supabaseAdmin.from('conti_righe').insert([{ conto_id: contoId, articolo_id: art.id, codice: art.codice, nome: art.nome, qta: 1, prezzo_unitario: prezzo, sconto: 0, totale: prezzo }])
     }
     loadConti()
   }
@@ -156,12 +152,12 @@ export default function CassaPage() {
     setCarrello(conto.righe)
     setContoAttivo(null)
     setShowPaga(true)
-    await supabase.from('conti_cassa').update({ stato: 'chiuso', closed_at: new Date().toISOString() }).eq('id', contoId)
+    await supabaseAdmin.from('conti_cassa').update({ stato: 'chiuso', closed_at: new Date().toISOString() }).eq('id', contoId)
     loadConti()
   }
 
   async function eliminaRigaConto(rigaId: string) {
-    await supabase.from('conti_righe').delete().eq('id', rigaId)
+    await supabaseAdmin.from('conti_righe').delete().eq('id', rigaId)
     loadConti()
   }
 

@@ -1,11 +1,7 @@
 'use client'
 import { useState, useEffect } from 'react'
-import { createClient } from '@supabase/supabase-js'
+import { supabase, supabaseAdmin } from '../../../lib/supabase'
 
-const supabase = createClient(
-  'https://iwvesqajdjmsuxyvplxo.supabase.co',
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Iml3dmVzcWFqZGptc3V4eXZwbHhvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY1MjQ1MzAsImV4cCI6MjA5MjEwMDUzMH0.9VjwWEKzv2kUSE2eHkKg0NbwZImtEytc3V05HAG7rxw'
-)
 
 type Cliente = {
   id?: string; nome: string; tipo: string; piva: string; cf: string;
@@ -43,7 +39,7 @@ export default function ClientiPage() {
 
   async function loadClienti() {
     setLoading(true)
-    const { data, error } = await supabase.from('clienti').select('*').order('created_at', { ascending: false })
+    const { data, error } = await supabaseAdmin.from('clienti').select('*').order('created_at', { ascending: false })
     if (error) setError('Errore caricamento: ' + error.message)
     else setClienti(data || [])
     setLoading(false)
@@ -53,12 +49,12 @@ export default function ClientiPage() {
     if (!form.nome.trim()) { setError('Il nome è obbligatorio'); return }
     setSaving(true); setError(''); setSuccess('')
     const { data: { user } } = await supabase.auth.getUser()
-    const payload = { ...form, user_id: user?.id, sconto: Number(form.sconto), fido: Number(form.fido) }
+    const payload = { ...form, user_id: user?.id || 'f1e0512f-0ecd-41b5-a29a-33fc9f832528', sconto: Number(form.sconto), fido: Number(form.fido) }
     let result
     if (editId) {
-      result = await supabase.from('clienti').update(payload).eq('id', editId)
+      result = await supabaseAdmin.from('clienti').update(payload).eq('id', editId)
     } else {
-      result = await supabase.from('clienti').insert([payload])
+      result = await supabaseAdmin.from('clienti').insert([payload])
     }
     if (result.error) { setError('Errore salvataggio: ' + result.error.message) }
     else { setSuccess(editId ? 'Cliente aggiornato!' : 'Cliente salvato!'); setShowForm(false); setForm(emptyForm); setEditId(null); loadClienti() }
@@ -67,7 +63,7 @@ export default function ClientiPage() {
 
   async function eliminaCliente(id: string) {
     if (!confirm('Eliminare questo cliente?')) return
-    const { error } = await supabase.from('clienti').delete().eq('id', id)
+    const { error } = await supabaseAdmin.from('clienti').delete().eq('id', id)
     if (error) setError('Errore eliminazione: ' + error.message)
     else { setSuccess('Cliente eliminato'); loadClienti() }
   }
