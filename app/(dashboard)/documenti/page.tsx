@@ -70,6 +70,7 @@ export default function DocumentiPage() {
   const [righe, setRighe] = useState<RigaDoc[]>([])
   const [cercaCliente, setCercaCliente] = useState('')
   const [showClienti, setShowClienti] = useState(false)
+  const [inputCliente, setInputCliente] = useState('')
   const [cercaArt, setCercaArt] = useState('')
   const [risultatiArt, setRisultatiArt] = useState<any[]>([])
   const [showRisultati, setShowRisultati] = useState(false)
@@ -151,7 +152,8 @@ export default function DocumentiPage() {
   const nPezzi = righe.reduce((s,r)=>s+r.qta,0)
 
   function selezionaCliente(c: any) {
-    setClienteId(c.id); setClienteNome(c.ragione_sociale||`${c.nome||''} ${c.cognome||''}`.trim())
+    const nome = c.ragione_sociale||`${c.nome||''} ${c.cognome||''}`.trim()
+    setClienteId(c.id); setClienteNome(nome); setInputCliente(nome)
     setCercaCliente(''); setShowClienti(false); if(c.listino) setListino(c.listino as any)
   }
 
@@ -166,7 +168,7 @@ export default function DocumentiPage() {
     const num=await generaNumero(tipoIniziale)
     setEditId(null); setTipo(tipoIniziale); setNumero(num)
     setDataDoc(new Date().toISOString().split('T')[0]); setDataReg(new Date().toISOString().split('T')[0]); setDataConsegna('')
-    setClienteId(''); setClienteNome(''); setCercaCliente('')
+    setClienteId(''); setClienteNome(''); setCercaCliente(''); setInputCliente('')
     setListino('base'); setPagamento('contanti'); setAgente(''); setNoteDoc(''); setRighe([])
     setView('form'); setTimeout(()=>eanRef.current?.focus(),300)
   }
@@ -174,7 +176,7 @@ export default function DocumentiPage() {
   async function apriModificaDoc(doc: any) {
     setEditId(doc.id); setTipo((doc.tipo||'preventivo') as TipoDoc); setNumero(doc.numero_doc||'')
     setDataDoc(doc.data_documento||''); setDataReg(doc.data_registrazione||''); setDataConsegna(doc.data_consegna||'')
-    setClienteId(doc.cliente_id||''); setClienteNome(doc.cliente_nome||'')
+    setClienteId(doc.cliente_id||''); setClienteNome(doc.cliente_nome||''); setInputCliente(doc.cliente_nome||'')
     setListino(doc.listino||'base'); setPagamento(doc.metodo_pagamento||'contanti'); setAgente(doc.agente||''); setNoteDoc(doc.note||'')
     const {data:righeDB}=await supabaseAdmin.from('documenti_righe').select('*').eq('documento_id',doc.id).order('riga_num')
     setRighe((righeDB||[]).map(r=>{const c=calcRiga(r.prezzo||0,r.qta||1,r.sconto1||0,r.sconto2||0,r.iva||22);return{id:r.id,articolo_id:r.articolo_id,variante_id:r.variante_id,codice:r.codice||'',variante:r.variante||'',colore:r.colore||'',dis_taglia:r.dis_taglia||'',descrizione:r.descrizione||'',um:r.um||'Pz',qta:r.qta||1,prezzo:r.prezzo||0,sconto1:r.sconto1||0,sconto2:r.sconto2||0,iva:r.iva||22,...c}}))
@@ -257,7 +259,7 @@ export default function DocumentiPage() {
     return matchTab&&matchTipo&&matchStato&&matchCerca&&matchDal&&matchAl
   })
 
-  const clientiFiltrati=clienti.filter(c=>{const n=(c.ragione_sociale||`${c.nome||''} ${c.cognome||''}`).toLowerCase();return n.includes(cercaCliente.toLowerCase())}).slice(0,8)
+  const clientiFiltrati=clienti.filter(c=>{const n=(c.ragione_sociale||`${c.nome||''} ${c.cognome||''}`).toLowerCase();const q=cercaCliente.toLowerCase();return !q||n.includes(q)||(c.codice_cliente||'').toLowerCase().includes(q)}).slice(0,8)
   const isMagazzinoTipo=TIPI_DOCUMENTO[tipo]?.cat==='magazzino'
 
   if(view==='form') return (
@@ -294,12 +296,23 @@ export default function DocumentiPage() {
           <div>
             <label style={{fontSize:11,fontWeight:600,color:'#64748b',display:'block',marginBottom:3}}>{isMagazzinoTipo?'FORNITORE / DEPOSITO':'CLIENTE'}</label>
             <div style={{position:'relative'}}>
-              <input value={clienteNome||cercaCliente} onChange={e=>{setCercaCliente(e.target.value);setClienteId('');setClienteNome('');setShowClienti(true)}} onFocus={()=>setShowClienti(true)} placeholder={isMagazzinoTipo?"Fornitore (opzionale)...":"Cerca cliente..."} style={inp()}/>
-              {showClienti&&cercaCliente&&clientiFiltrati.length>0&&(
-                <div style={{position:'absolute',top:'100%',left:0,right:0,background:'#fff',border:'1px solid #e2e8f0',borderRadius:8,zIndex:50,boxShadow:'0 4px 16px rgba(0,0,0,0.1)',maxHeight:160,overflowY:'auto'}}>
+              <div style={{position:'relative'}}>
+                <input
+                  value={inputCliente}
+                  onChange={e=>{setInputCliente(e.target.value);setCercaCliente(e.target.value);setClienteId('');setClienteNome('');setShowClienti(true)}}
+                  onFocus={()=>setShowClienti(true)}
+                  onBlur={()=>setTimeout(()=>setShowClienti(false),200)}
+                  placeholder={isMagazzinoTipo?'Fornitore (opzionale)...':'Cerca cliente per nome o codice...'}
+                  style={{...inp(), paddingRight:clienteId?'28px':'10px'}}
+                />
+                {clienteId&&<span style={{position:'absolute',right:8,top:'50%',transform:'translateY(-50%)',color:'#10b981',fontSize:16,cursor:'pointer',fontWeight:700}} onClick={()=>{setClienteId('');setClienteNome('');setInputCliente('');setCercaCliente('')}}>✓</span>}
+              </div>
+              {showClienti&&clientiFiltrati.length>0&&(
+                <div style={{position:'absolute',top:'100%',left:0,right:0,background:'#fff',border:'1px solid #e2e8f0',borderRadius:8,zIndex:50,boxShadow:'0 4px 16px rgba(0,0,0,0.15)',maxHeight:180,overflowY:'auto',marginTop:2}}>
                   {clientiFiltrati.map(c=>(
-                    <div key={c.id} onClick={()=>selezionaCliente(c)} style={{padding:'7px 12px',cursor:'pointer',fontSize:13,borderBottom:'1px solid #f1f5f9'}} onMouseEnter={e=>(e.currentTarget.style.background='#f0f9ff')} onMouseLeave={e=>(e.currentTarget.style.background='#fff')}>
-                      {c.ragione_sociale||`${c.nome||''} ${c.cognome||''}`.trim()}
+                    <div key={c.id} onMouseDown={()=>selezionaCliente(c)} style={{padding:'8px 12px',cursor:'pointer',fontSize:13,borderBottom:'1px solid #f1f5f9',display:'flex',justifyContent:'space-between'}} onMouseEnter={e=>(e.currentTarget.style.background='#f0f9ff')} onMouseLeave={e=>(e.currentTarget.style.background='#fff')}>
+                      <span>{c.ragione_sociale||`${c.nome||''} ${c.cognome||''}`.trim()}</span>
+                      {c.codice_cliente&&<span style={{fontSize:11,color:'#94a3b8'}}>{c.codice_cliente}</span>}
                     </div>
                   ))}
                 </div>

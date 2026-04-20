@@ -41,6 +41,7 @@ const PERMESSI: Record<string, Ruolo[]> = {
   documenti:    ['super_admin','admin','manager','commerciale','cassiere'],
   scadenzario:  ['super_admin','admin','manager','commerciale'],
   mastrino:     ['super_admin','admin','manager','commerciale'],
+  'partita-doppia': ['super_admin','admin','manager'],
   magazzino:    ['super_admin','admin','manager','magazziniere'],
   cassa:        ['super_admin','admin','manager','cassiere'],
   hr:           ['super_admin','admin'],

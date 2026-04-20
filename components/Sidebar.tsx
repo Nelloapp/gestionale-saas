@@ -17,6 +17,7 @@ const menuGruppi = [
       { href: '/documenti',    icon: '📄', label: 'Documenti',    sezione: 'documenti' },
       { href: '/scadenzario',  icon: '📅', label: 'Scadenzario',  sezione: 'scadenzario' },
       { href: '/mastrino',     icon: '📊', label: 'Mastrino',     sezione: 'mastrino' },
+      { href: '/partita-doppia', icon: '⚖️', label: 'Partita Doppia', sezione: 'partita-doppia' },
     ]
   },
   {

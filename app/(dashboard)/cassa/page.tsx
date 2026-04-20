@@ -37,6 +37,7 @@ export default function CassaPage() {
   const [clienteNome, setClienteNome] = useState('')
   const [cercaCliente, setCercaCliente] = useState('')
   const [showClienti, setShowClienti] = useState(false)
+  const [inputCliente, setInputCliente] = useState('')
   const [listino, setListino] = useState<'base'|'ingrosso'|'promo'|'vip'>('base')
   const [pagamento, setPagamento] = useState('contanti')
   const [sospeso, setSospeso] = useState(false)
@@ -173,9 +174,14 @@ export default function CassaPage() {
   const resto = parseFloat(importoRicevuto || '0') - totale
 
   function selezionaCliente(c: any) {
-    setClienteId(c.id); setClienteNome(c.ragione_sociale || `${c.nome || ''} ${c.cognome || ''}`.trim())
-    setCercaCliente(''); setShowClienti(false)
+    const nome = c.ragione_sociale || `${c.nome || ''} ${c.cognome || ''}`.trim()
+    setClienteId(c.id); setClienteNome(nome)
+    setInputCliente(nome); setCercaCliente(''); setShowClienti(false)
     if (c.listino) setListino(c.listino as any)
+  }
+
+  function clearCliente() {
+    setClienteId(''); setClienteNome(''); setInputCliente(''); setCercaCliente('')
   }
 
   async function loadDocumentiCliente(cid: string) {
@@ -267,7 +273,8 @@ export default function CassaPage() {
 
   const clientiFiltrati = clienti.filter(c => {
     const n = (c.ragione_sociale || `${c.nome || ''} ${c.cognome || ''}`).toLowerCase()
-    return n.includes(cercaCliente.toLowerCase())
+    const q = cercaCliente.toLowerCase()
+    return !q || n.includes(q) || (c.codice_cliente||'').toLowerCase().includes(q)
   }).slice(0, 8)
 
   const s = (bg: string, extra?: any): any => ({ background: bg, color: '#fff', border: 'none', borderRadius: 8, padding: '8px 14px', cursor: 'pointer', fontWeight: 600, fontSize: 13, ...extra })
@@ -286,12 +293,25 @@ export default function CassaPage() {
             <div style={{ padding: '14px 16px', borderBottom: '1px solid #f1f5f9' }}>
               <div style={{ marginBottom: 10, position: 'relative' }}>
                 <label style={{ fontSize: 11, fontWeight: 600, color: '#64748b', display: 'block', marginBottom: 4 }}>CLIENTE</label>
-                <input value={clienteNome || cercaCliente} onChange={e=>{setCercaCliente(e.target.value);setClienteId('');setClienteNome('');setShowClienti(true)}} onFocus={()=>setShowClienti(true)} placeholder="Cerca cliente..." style={{ width:'100%', border:'1px solid #e2e8f0', borderRadius:8, padding:'8px 10px', fontSize:13, boxSizing:'border-box', outline:'none' }}/>
-                {showClienti && cercaCliente && clientiFiltrati.length > 0 && (
-                  <div style={{ position:'absolute', top:'100%', left:0, right:0, background:'#fff', border:'1px solid #e2e8f0', borderRadius:8, zIndex:50, boxShadow:'0 4px 16px rgba(0,0,0,0.1)', maxHeight:180, overflowY:'auto' }}>
+                <div style={{ position:'relative' }}>
+                  <input
+                    value={inputCliente}
+                    onChange={e=>{ setInputCliente(e.target.value); setCercaCliente(e.target.value); setClienteId(''); setClienteNome(''); setShowClienti(true) }}
+                    onFocus={()=>setShowClienti(true)}
+                    onBlur={()=>setTimeout(()=>setShowClienti(false),200)}
+                    placeholder="Cerca cliente per nome o codice..."
+                    style={{ width:'100%', border:'1px solid #e2e8f0', borderRadius:8, padding:'8px 10px', fontSize:13, boxSizing:'border-box', outline:'none', paddingRight: clienteId?'28px':'10px' }}
+                  />
+                  {clienteId && (
+                    <span style={{ position:'absolute', right:8, top:'50%', transform:'translateY(-50%)', color:'#10b981', fontSize:16, cursor:'pointer', fontWeight:700 }} onClick={clearCliente}>✓</span>
+                  )}
+                </div>
+                {showClienti && clientiFiltrati.length > 0 && (
+                  <div style={{ position:'absolute', top:'100%', left:0, right:0, background:'#fff', border:'1px solid #e2e8f0', borderRadius:8, zIndex:50, boxShadow:'0 4px 16px rgba(0,0,0,0.15)', maxHeight:200, overflowY:'auto', marginTop:2 }}>
                     {clientiFiltrati.map(c=>(
-                      <div key={c.id} onClick={()=>selezionaCliente(c)} style={{ padding:'8px 12px', cursor:'pointer', fontSize:13, borderBottom:'1px solid #f1f5f9' }} onMouseEnter={e=>(e.currentTarget.style.background='#f0f9ff')} onMouseLeave={e=>(e.currentTarget.style.background='#fff')}>
-                        {c.ragione_sociale || `${c.nome||''} ${c.cognome||''}`.trim()}
+                      <div key={c.id} onMouseDown={()=>selezionaCliente(c)} style={{ padding:'9px 12px', cursor:'pointer', fontSize:13, borderBottom:'1px solid #f1f5f9', display:'flex', justifyContent:'space-between' }} onMouseEnter={e=>(e.currentTarget.style.background='#f0f9ff')} onMouseLeave={e=>(e.currentTarget.style.background='#fff')}>
+                        <span>{c.ragione_sociale || `${c.nome||''} ${c.cognome||''}`.trim()}</span>
+                        {c.codice_cliente && <span style={{ fontSize:11, color:'#94a3b8' }}>{c.codice_cliente}</span>}
                       </div>
                     ))}
                   </div>
@@ -351,12 +371,23 @@ export default function CassaPage() {
           <div style={{ flex:1, overflowY:'auto', padding:16 }}>
             <div style={{ fontSize:13, fontWeight:600, color:'#64748b', marginBottom:12 }}>Seleziona cliente per vedere i documenti aperti</div>
             <div style={{ position:'relative', marginBottom:12 }}>
-              <input value={clienteNome||cercaCliente} onChange={e=>{setCercaCliente(e.target.value);setClienteId('');setClienteNome('');setShowClienti(true)}} onFocus={()=>setShowClienti(true)} placeholder="Cerca cliente..." style={{ width:'100%', border:'1px solid #e2e8f0', borderRadius:8, padding:'8px 10px', fontSize:13, boxSizing:'border-box', outline:'none' }}/>
-              {showClienti && cercaCliente && clientiFiltrati.length > 0 && (
-                <div style={{ position:'absolute', top:'100%', left:0, right:0, background:'#fff', border:'1px solid #e2e8f0', borderRadius:8, zIndex:50, boxShadow:'0 4px 16px rgba(0,0,0,0.1)', maxHeight:180, overflowY:'auto' }}>
+              <div style={{ position:'relative' }}>
+                <input
+                  value={inputCliente}
+                  onChange={e=>{ setInputCliente(e.target.value); setCercaCliente(e.target.value); setClienteId(''); setClienteNome(''); setShowClienti(true) }}
+                  onFocus={()=>setShowClienti(true)}
+                  onBlur={()=>setTimeout(()=>setShowClienti(false),200)}
+                  placeholder="Cerca cliente..."
+                  style={{ width:'100%', border:'1px solid #e2e8f0', borderRadius:8, padding:'8px 10px', fontSize:13, boxSizing:'border-box', outline:'none', paddingRight: clienteId?'28px':'10px' }}
+                />
+                {clienteId && <span style={{ position:'absolute', right:8, top:'50%', transform:'translateY(-50%)', color:'#10b981', fontSize:16, cursor:'pointer' }} onClick={clearCliente}>✓</span>}
+              </div>
+              {showClienti && clientiFiltrati.length > 0 && (
+                <div style={{ position:'absolute', top:'100%', left:0, right:0, background:'#fff', border:'1px solid #e2e8f0', borderRadius:8, zIndex:50, boxShadow:'0 4px 16px rgba(0,0,0,0.15)', maxHeight:200, overflowY:'auto', marginTop:2 }}>
                   {clientiFiltrati.map(c=>(
-                    <div key={c.id} onClick={()=>{selezionaCliente(c);loadDocumentiCliente(c.id)}} style={{ padding:'8px 12px', cursor:'pointer', fontSize:13, borderBottom:'1px solid #f1f5f9' }} onMouseEnter={e=>(e.currentTarget.style.background='#f0f9ff')} onMouseLeave={e=>(e.currentTarget.style.background='#fff')}>
-                      {c.ragione_sociale || `${c.nome||''} ${c.cognome||''}`.trim()}
+                    <div key={c.id} onMouseDown={()=>{selezionaCliente(c);loadDocumentiCliente(c.id)}} style={{ padding:'9px 12px', cursor:'pointer', fontSize:13, borderBottom:'1px solid #f1f5f9', display:'flex', justifyContent:'space-between' }} onMouseEnter={e=>(e.currentTarget.style.background='#f0f9ff')} onMouseLeave={e=>(e.currentTarget.style.background='#fff')}>
+                      <span>{c.ragione_sociale || `${c.nome||''} ${c.cognome||''}`.trim()}</span>
+                      {c.codice_cliente && <span style={{ fontSize:11, color:'#94a3b8' }}>{c.codice_cliente}</span>}
                     </div>
                   ))}
                 </div>
