@@ -60,7 +60,7 @@ export default function CassaPage() {
 
   async function loadBase() {
     const [{ data: cls }, { data: arts }, { data: vars }] = await Promise.all([
-      supabaseAdmin.from('clienti').select('id, nome, cognome, ragione_sociale, listino').order('nome'),
+      supabaseAdmin.from('clienti').select('id, nome, tipo, citta, listino').order('nome'),
       supabaseAdmin.from('articoli').select('id, nome, codice, ean, prezzo_base, prezzo_ingrosso, prezzo_promo, prezzo_vip, iva, um').order('nome'),
       supabaseAdmin.from('varianti_articolo').select('id, articolo_id, colore_nome, misura_nome, ean, codice_variante, prezzo_override'),
     ])
@@ -174,7 +174,7 @@ export default function CassaPage() {
   const resto = parseFloat(importoRicevuto || '0') - totale
 
   function selezionaCliente(c: any) {
-    const nome = c.ragione_sociale || `${c.nome || ''} ${c.cognome || ''}`.trim()
+    const nome = c.nome || ''
     setClienteId(c.id); setClienteNome(nome)
     setInputCliente(nome); setCercaCliente(''); setShowClienti(false)
     if (c.listino) setListino(c.listino as any)
@@ -272,7 +272,7 @@ export default function CassaPage() {
   }
 
   const clientiFiltrati = clienti.filter(c => {
-    const n = (c.ragione_sociale || `${c.nome || ''} ${c.cognome || ''}`).toLowerCase()
+    const n = (c.nome || '').toLowerCase()
     const q = cercaCliente.toLowerCase()
     return !q || n.includes(q) || (c.codice_cliente||'').toLowerCase().includes(q)
   }).slice(0, 8)
@@ -310,7 +310,7 @@ export default function CassaPage() {
                   <div style={{ position:'absolute', top:'100%', left:0, right:0, background:'#fff', border:'1px solid #e2e8f0', borderRadius:8, zIndex:50, boxShadow:'0 4px 16px rgba(0,0,0,0.15)', maxHeight:200, overflowY:'auto', marginTop:2 }}>
                     {clientiFiltrati.map(c=>(
                       <div key={c.id} onMouseDown={()=>selezionaCliente(c)} style={{ padding:'9px 12px', cursor:'pointer', fontSize:13, borderBottom:'1px solid #f1f5f9', display:'flex', justifyContent:'space-between' }} onMouseEnter={e=>(e.currentTarget.style.background='#f0f9ff')} onMouseLeave={e=>(e.currentTarget.style.background='#fff')}>
-                        <span>{c.ragione_sociale || `${c.nome||''} ${c.cognome||''}`.trim()}</span>
+                        <span style={{fontWeight:600}}>{c.nome||''}</span>
                         {c.codice_cliente && <span style={{ fontSize:11, color:'#94a3b8' }}>{c.codice_cliente}</span>}
                       </div>
                     ))}

@@ -32,14 +32,14 @@ export default function MastrinoPage() {
 
   async function loadClienti() {
     setLoadingClienti(true)
-    const { data } = await supabaseAdmin.from('clienti').select('id, nome, cognome, ragione_sociale, codice_cliente, citta, telefono, piva, email').order('nome')
+    const { data } = await supabaseAdmin.from('clienti').select('id, nome, tipo, citta, tel, piva, email').order('nome')
     setClienti(data || [])
     setLoadingClienti(false)
   }
 
   async function selezionaCliente(c: any) {
     setClienteSelezionato(c)
-    setCercaInput(c.ragione_sociale || `${c.nome||''} ${c.cognome||''}`.trim())
+    setCercaInput(c.nome || '')
     setShowDropdown(false)
     setLoading(true)
     await Promise.all([loadMovimenti(c.id), loadDocumentiAperti(c.id)])
@@ -79,7 +79,7 @@ export default function MastrinoPage() {
     const { data: lastMov } = await supabaseAdmin.from('mastino_clienti').select('saldo_progressivo').eq('cliente_id', clienteSelezionato.id).order('created_at', { ascending: false }).limit(1)
     const saldoPrec = Number(lastMov?.[0]?.saldo_progressivo || 0)
     const nuovoSaldo = saldoPrec - importo
-    const nomeC = clienteSelezionato.ragione_sociale || `${clienteSelezionato.nome||''} ${clienteSelezionato.cognome||''}`.trim()
+    const nomeC = clienteSelezionato.nome || ''
     await supabaseAdmin.from('mastino_clienti').insert([{
       user_id: uid, cliente_id: clienteSelezionato.id, cliente_nome: nomeC,
       documento_id: docIncasso.id, numero_doc: docIncasso.numero_doc,
@@ -110,7 +110,7 @@ export default function MastrinoPage() {
   }
 
   const clientiFiltrati = clienti.filter(c => {
-    const n = (c.ragione_sociale || `${c.nome||''} ${c.cognome||''}`).toLowerCase()
+    const n = (c.nome || '').toLowerCase()
     return !cercaInput || n.includes(cercaInput.toLowerCase()) || (c.codice_cliente||'').toLowerCase().includes(cercaInput.toLowerCase())
   }).slice(0, 10)
 
@@ -148,14 +148,14 @@ export default function MastrinoPage() {
           {showDropdown && clientiFiltrati.length > 0 && (
             <div style={{ position:'absolute', top:'100%', left:0, right:0, background:'#fff', border:'1px solid #e2e8f0', borderRadius:10, zIndex:50, boxShadow:'0 8px 24px rgba(0,0,0,0.12)', maxHeight:280, overflowY:'auto', marginTop:4 }}>
               {clientiFiltrati.map(c => {
-                const nome = c.ragione_sociale || `${c.nome||''} ${c.cognome||''}`.trim()
+                const nome = c.nome || ''
                 return (
                   <div key={c.id} onMouseDown={() => selezionaCliente(c)} style={{ padding:'10px 14px', cursor:'pointer', borderBottom:'1px solid #f1f5f9', display:'flex', justifyContent:'space-between', alignItems:'center' }} onMouseEnter={e=>(e.currentTarget.style.background='#f0f9ff')} onMouseLeave={e=>(e.currentTarget.style.background='#fff')}>
                     <div>
                       <div style={{ fontSize:14, fontWeight:600, color:'#1e293b' }}>{nome}</div>
                       <div style={{ fontSize:11, color:'#94a3b8' }}>{c.codice_cliente?`Cod. ${c.codice_cliente}`:''} {c.citta?`— ${c.citta}`:''}</div>
                     </div>
-                    {c.telefono && <div style={{ fontSize:12, color:'#64748b' }}>{c.telefono}</div>}
+                    {c.tel && <div style={{ fontSize:12, color:'#64748b' }}>{c.tel}</div>}
                   </div>
                 )
               })}
@@ -289,11 +289,11 @@ export default function MastrinoPage() {
                       <div style={{ background:'#f8fafc', borderRadius:12, padding:20, border:'1px solid #e2e8f0' }}>
                         <div style={{ fontSize:13, fontWeight:700, color:'#64748b', marginBottom:16, letterSpacing:1 }}>DATI CLIENTE</div>
                         {[
-                          ['Ragione Sociale', clienteSelezionato.ragione_sociale || `${clienteSelezionato.nome||''} ${clienteSelezionato.cognome||''}`.trim()],
+                          ['Ragione Sociale/Nome', clienteSelezionato.nome || ''],
                           ['Codice', clienteSelezionato.codice_cliente||'--'],
                           ['P.IVA', clienteSelezionato.piva||'--'],
                           ['Email', clienteSelezionato.email||'--'],
-                          ['Telefono', clienteSelezionato.telefono||'--'],
+                          ['Telefono', clienteSelezionato.tel||'--'],
                           ['Città', clienteSelezionato.citta||'--'],
                         ].map(([k,v]) => (
                           <div key={k} style={{ display:'flex', justifyContent:'space-between', fontSize:13, marginBottom:8 }}>
@@ -343,7 +343,7 @@ export default function MastrinoPage() {
             <div style={{ padding:'20px 22px', display:'flex', flexDirection:'column', gap:14 }}>
               <div style={{ background:'#f0fdf4', borderRadius:10, padding:'12px 16px', border:'1px solid #bbf7d0' }}>
                 <div style={{ fontSize:12, color:'#64748b', marginBottom:4 }}>Documento: <strong>{docIncasso.numero_doc}</strong></div>
-                <div style={{ fontSize:12, color:'#64748b', marginBottom:4 }}>Cliente: <strong>{clienteSelezionato?.ragione_sociale||clienteSelezionato?.nome}</strong></div>
+                <div style={{ fontSize:12, color:'#64748b', marginBottom:4 }}>Cliente: <strong>{clienteSelezionato?.nome}</strong></div>
                 <div style={{ fontSize:15, fontWeight:700, color:'#1e293b' }}>Totale: EUR {Number(docIncasso.totale_documento||0).toFixed(2)}</div>
                 {Number(docIncasso.importo_pagato)>0 && <div style={{ fontSize:12, color:'#10b981' }}>Già pagato: EUR {Number(docIncasso.importo_pagato).toFixed(2)}</div>}
               </div>
