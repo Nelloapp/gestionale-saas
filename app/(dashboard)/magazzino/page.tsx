@@ -63,7 +63,7 @@ export default function MagazzinoPage() {
       user_id: uid, articolo_id: form.articolo_id, tipo: form.tipo,
       qta: form.qta, qta_prima: stockPrima, qta_dopo: stockDopo,
       riferimento: form.riferimento, note: form.note,
-      data_movimento: form.data_movimento, created_at: new Date().toISOString()
+      data_movimento: form.data_movimento || new Date().toISOString().split('T')[0], created_at: new Date().toISOString()
     }])
     await supabaseAdmin.from('articoli').update({ stock: stockDopo }).eq('id', form.articolo_id)
     setSuccess(`✅ Movimento registrato! ${art?.nome}: ${stockPrima} → ${stockDopo} pz`)

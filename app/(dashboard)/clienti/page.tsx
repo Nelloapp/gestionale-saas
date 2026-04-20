@@ -49,7 +49,13 @@ export default function ClientiPage() {
     if (!form.nome.trim()) { setError('Il nome è obbligatorio'); return }
     setSaving(true); setError(''); setSuccess('')
     const { data: { user } } = await supabase.auth.getUser()
-    const payload = { ...form, user_id: user?.id || 'f1e0512f-0ecd-41b5-a29a-33fc9f832528', sconto: Number(form.sconto), fido: Number(form.fido) }
+    const payload = { 
+      ...form, 
+      user_id: user?.id || 'f1e0512f-0ecd-41b5-a29a-33fc9f832528', 
+      sconto: Number(form.sconto), 
+      fido: Number(form.fido),
+      data_primo_acquisto: form.data_primo_acquisto || null
+    }
     let result
     if (editId) {
       result = await supabaseAdmin.from('clienti').update(payload).eq('id', editId)

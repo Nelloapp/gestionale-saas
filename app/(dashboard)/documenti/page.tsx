@@ -146,7 +146,11 @@ export default function DocumentiPage() {
       ...form, user_id: uid, numero_doc: numDoc,
       anno: new Date().getFullYear(),
       totale_imponibile: totImponibile, totale_iva: totIva, totale_documento: totDocumento,
-      updated_at: new Date().toISOString()
+      updated_at: new Date().toISOString(),
+      data_registrazione: form.data_registrazione || null,
+      data_documento: form.data_documento || null,
+      data_consegna: form.data_consegna || null,
+      data_scadenza: form.data_scadenza || null
     }
 
     let docSalvato: any
