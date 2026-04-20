@@ -3,522 +3,471 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { supabase, supabaseAdmin } from '../../../lib/supabase'
 
 const USER_ID = 'f1e0512f-0ecd-41b5-a29a-33fc9f832528'
-const inp = (extra?: any): any => ({ width: '100%', border: '1px solid #e2e8f0', borderRadius: 8, padding: '8px 12px', fontSize: 14, outline: 'none', boxSizing: 'border-box', background: '#fff', ...extra })
-const btn = (bg: string, extra?: any): any => ({ background: bg, color: '#fff', border: 'none', borderRadius: 8, padding: '8px 18px', cursor: 'pointer', fontWeight: 600, fontSize: 14, ...extra })
 
-const TIPI_DOC = [
-  { id: 'preventivo', label: 'Preventivo', prefix: 'PV' },
-  { id: 'ordine', label: 'Ordine', prefix: 'OR' },
-  { id: 'ddt', label: 'DDT', prefix: 'DDT' },
-  { id: 'fattura', label: 'Fattura', prefix: 'FT' },
-  { id: 'incasso', label: 'Incasso', prefix: 'INC' },
-]
-const LISTINI = ['Base', 'Ingrosso', 'Promo', 'VIP']
-const PAGAMENTI = ['Contanti', 'Carta', 'Bonifico', 'Assegno', 'RiBa', 'SDD']
-const emptyRiga = { articolo_id: '', codice: '', ean: '', descrizione: '', colore_nome: '', misura_nome: '', um: 'Pz', qta: 1, prezzo: 0, sconto1: 0, sconto2: 0, iva: 22, imponibile: 0, importo: 0 }
-const emptyForm = { tipo: 'preventivo', cliente_id: '', cliente_nome: '', cliente_cf: '', data_registrazione: new Date().toISOString().split('T')[0], data_documento: new Date().toISOString().split('T')[0], data_consegna: '', data_scadenza: '', pagamento: 'Contanti', listino: 'Base', agente: '', note: '', stato: 'bozza' }
-
-function calcolaRiga(r: any) {
-  const prezzoScontato = r.prezzo * (1 - r.sconto1 / 100) * (1 - r.sconto2 / 100)
-  const imponibile = prezzoScontato * r.qta
-  const importo = imponibile * (1 + r.iva / 100)
-  return { ...r, imponibile: Math.round(imponibile * 100) / 100, importo: Math.round(importo * 100) / 100 }
+interface RigaDoc {
+  id: string
+  articolo_id: string | null
+  variante_id: string | null
+  codice: string
+  descrizione: string
+  um: string
+  qta: number
+  prezzo: number
+  sconto1: number
+  sconto2: number
+  iva: number
+  importo: number
 }
 
+function calcRiga(prezzo: number, qta: number, sc1: number, sc2: number, iva: number) {
+  return Math.round(prezzo * qta * (1 - sc1/100) * (1 - sc2/100) * (1 + iva/100) * 100) / 100
+}
+
+const inp = (extra?: any): any => ({ width:'100%', border:'1px solid #e2e8f0', borderRadius:8, padding:'7px 10px', fontSize:13, outline:'none', boxSizing:'border-box', background:'#fff', ...extra })
+const btn = (bg: string, extra?: any): any => ({ background:bg, color:'#fff', border:'none', borderRadius:8, padding:'8px 16px', cursor:'pointer', fontWeight:600, fontSize:13, ...extra })
+
 export default function DocumentiPage() {
+  const [view, setView] = useState<'lista'|'form'>('lista')
   const [documenti, setDocumenti] = useState<any[]>([])
   const [clienti, setClienti] = useState<any[]>([])
-  const [articoli, setArticoli] = useState<any[]>([])
-  const [varianti, setVarianti] = useState<any[]>([])
+  const [articoliDB, setArticoliDB] = useState<any[]>([])
+  const [variantiDB, setVariantiDB] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
-  const [view, setView] = useState<'lista' | 'form'>('lista')
-  const [form, setForm] = useState({ ...emptyForm })
-  const [righe, setRighe] = useState<any[]>([{ ...emptyRiga }])
-  const [docId, setDocId] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
-  const [saving, setSaving] = useState(false)
-  const [cerca, setCerca] = useState('')
+  // Filtri lista
+  const [filtroCerca, setFiltroCerca] = useState('')
   const [filtroTipo, setFiltroTipo] = useState('tutti')
   const [filtroStato, setFiltroStato] = useState('tutti')
   const [filtroDal, setFiltroDal] = useState('')
   const [filtroAl, setFiltroAl] = useState('')
-  const [filtroCliente, setFiltroCliente] = useState('')
-  const [cercaArticolo, setCercaArticolo] = useState('')
-  const [suggerimentiArt, setSuggerimentiArt] = useState<any[]>([])
-  const [rigaAttiva, setRigaAttiva] = useState<number | null>(null)
-  const [tabForm, setTabForm] = useState<'testata' | 'righe' | 'scadenze'>('testata')
-  const barcodeRef = useRef<HTMLInputElement>(null)
-  const barcodeTimer = useRef<any>(null)
+  // Form documento
+  const [editId, setEditId] = useState<string|null>(null)
+  const [tipo, setTipo] = useState('preventivo')
+  const [numero, setNumero] = useState('')
+  const [dataDoc, setDataDoc] = useState(new Date().toISOString().split('T')[0])
+  const [dataReg, setDataReg] = useState(new Date().toISOString().split('T')[0])
+  const [clienteId, setClienteId] = useState('')
+  const [clienteNome, setClienteNome] = useState('')
+  const [listino, setListino] = useState<'base'|'ingrosso'|'promo'|'vip'>('base')
+  const [pagamento, setPagamento] = useState('contanti')
+  const [noteDoc, setNoteDoc] = useState('')
+  const [righe, setRighe] = useState<RigaDoc[]>([])
+  const [cercaCliente, setCercaCliente] = useState('')
+  const [showClienti, setShowClienti] = useState(false)
+  const [cercaArt, setCercaArt] = useState('')
+  const [risultatiArt, setRisultatiArt] = useState<any[]>([])
+  const [showRisultati, setShowRisultati] = useState(false)
+  const eanRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => { loadAll() }, [])
 
   async function loadAll() {
     setLoading(true)
     const [{ data: docs }, { data: cls }, { data: arts }, { data: vars }] = await Promise.all([
-      supabaseAdmin.from('documenti').select('*').order('data_documento', { ascending: false }),
-      supabaseAdmin.from('clienti').select('id, nome, piva, cf, listino').order('nome'),
-      supabaseAdmin.from('articoli').select('id, nome, codice, ean, prezzo, prezzo_ingrosso, prezzo_promo, prezzo_vip, iva, um, stock').order('nome'),
-      supabaseAdmin.from('varianti_articolo').select('id, articolo_id, colore_nome, misura_nome, ean, codice_variante, prezzo_override, stock'),
+      supabaseAdmin.from('documenti').select('*').order('created_at', { ascending: false }),
+      supabaseAdmin.from('clienti').select('id, nome, cognome, ragione_sociale, listino').order('nome'),
+      supabaseAdmin.from('articoli').select('id, nome, codice, ean, prezzo_base, prezzo_ingrosso, prezzo_promo, prezzo_vip, iva, um').order('nome'),
+      supabaseAdmin.from('varianti_articolo').select('id, articolo_id, colore_nome, misura_nome, ean, codice_variante, prezzo_override'),
     ])
     setDocumenti(docs || [])
     setClienti(cls || [])
-    setArticoli(arts || [])
-    setVarianti(vars || [])
+    setArticoliDB(arts || [])
+    setVariantiDB(vars || [])
     setLoading(false)
   }
 
-  function getPrezzoListino(art: any, listino: string) {
-    if (listino === 'Ingrosso' && art.prezzo_ingrosso > 0) return art.prezzo_ingrosso
-    if (listino === 'Promo' && art.prezzo_promo > 0) return art.prezzo_promo
-    if (listino === 'VIP' && art.prezzo_vip > 0) return art.prezzo_vip
-    return art.prezzo || 0
+  function getPrezzoListino(art: any): number {
+    if (listino === 'ingrosso' && art.prezzo_ingrosso > 0) return art.prezzo_ingrosso
+    if (listino === 'promo' && art.prezzo_promo > 0) return art.prezzo_promo
+    if (listino === 'vip' && art.prezzo_vip > 0) return art.prezzo_vip
+    return art.prezzo_base || 0
   }
 
-  function cercaPerEanOCodice(query: string): any | null {
-    const q = query.trim().toLowerCase()
-    // Prima cerca nelle varianti per EAN
-    const varMatch = varianti.find(v => v.ean?.toLowerCase() === q || v.codice_variante?.toLowerCase() === q)
-    if (varMatch) {
-      const art = articoli.find(a => a.id === varMatch.articolo_id)
-      if (art) return { art, variante: varMatch }
-    }
-    // Poi cerca negli articoli per EAN o codice
-    const artMatch = articoli.find(a => a.ean?.toLowerCase() === q || a.codice?.toLowerCase() === q || a.nome?.toLowerCase().includes(q))
-    if (artMatch) return { art: artMatch, variante: null }
-    return null
-  }
-
-  function aggiungiRigaDaArticolo(art: any, variante: any, idx: number) {
-    const prezzo = variante?.prezzo_override || getPrezzoListino(art, form.listino)
-    const nuovaRiga = calcolaRiga({
-      ...emptyRiga,
-      articolo_id: art.id,
-      codice: variante?.codice_variante || art.codice || '',
-      ean: variante?.ean || art.ean || '',
-      descrizione: art.nome + (variante ? ` - ${variante.colore_nome || ''} ${variante.misura_nome || ''}`.trim() : ''),
-      colore_nome: variante?.colore_nome || '',
-      misura_nome: variante?.misura_nome || '',
-      um: art.um || 'Pz',
-      qta: 1,
-      prezzo,
-      iva: art.iva || 22,
-    })
-    const newRighe = [...righe]
-    newRighe[idx] = nuovaRiga
-    // Aggiungi riga vuota se era l'ultima
-    if (idx === righe.length - 1) newRighe.push({ ...emptyRiga })
-    setRighe(newRighe)
-    setSuggerimentiArt([])
-    setCercaArticolo('')
-    setRigaAttiva(null)
-  }
-
-  function handleBarcodeInput(e: React.KeyboardEvent<HTMLInputElement>) {
-    if (e.key === 'Enter') {
-      const val = (e.target as HTMLInputElement).value.trim()
-      if (!val) return
-      const found = cercaPerEanOCodice(val)
-      if (found) {
-        // Trova prima riga vuota o aggiunge in fondo
-        const idxVuota = righe.findIndex(r => !r.descrizione)
-        const idx = idxVuota >= 0 ? idxVuota : righe.length
-        if (idx === righe.length) setRighe(r => [...r, { ...emptyRiga }])
-        setTimeout(() => aggiungiRigaDaArticolo(found.art, found.variante, idx), 0)
-      } else {
-        setError('Articolo non trovato per: ' + val)
+  const eseguiRicerca = useCallback((q: string) => {
+    if (!q || q.length < 1) { setRisultatiArt([]); setShowRisultati(false); return }
+    const ql = q.toLowerCase()
+    const risultati: any[] = []
+    variantiDB.forEach(v => {
+      if (v.ean?.toLowerCase() === ql || v.codice_variante?.toLowerCase() === ql) {
+        const art = articoliDB.find(a => a.id === v.articolo_id)
+        if (art) risultati.unshift({ tipo: 'variante', ...v, _art: art })
       }
-      ;(e.target as HTMLInputElement).value = ''
-    }
-  }
-
-  function handleCercaArticolo(query: string, idx: number) {
-    setCercaArticolo(query)
-    setRigaAttiva(idx)
-    if (query.length < 2) { setSuggerimentiArt([]); return }
-    const q = query.toLowerCase()
-    const matches: any[] = []
-    articoli.forEach(art => {
-      if (art.nome?.toLowerCase().includes(q) || art.codice?.toLowerCase().includes(q) || art.ean?.includes(q)) {
-        matches.push({ art, variante: null, label: art.nome + (art.codice ? ` [${art.codice}]` : '') })
-      }
-      varianti.filter(v => v.articolo_id === art.id).forEach(v => {
-        if (v.ean?.includes(q) || v.codice_variante?.toLowerCase().includes(q) || art.nome?.toLowerCase().includes(q)) {
-          matches.push({ art, variante: v, label: `${art.nome} - ${v.colore_nome || ''} ${v.misura_nome || ''}`.trim() + (v.ean ? ` [${v.ean}]` : '') })
-        }
-      })
     })
-    setSuggerimentiArt(matches.slice(0, 10))
-  }
+    articoliDB.forEach(a => {
+      if (a.ean?.toLowerCase() === ql || a.codice?.toLowerCase() === ql) {
+        if (!risultati.find(r => r.tipo === 'articolo' && r.id === a.id)) risultati.unshift({ tipo: 'articolo', ...a })
+      }
+    })
+    articoliDB.forEach(a => {
+      if (a.nome?.toLowerCase().includes(ql) || a.codice?.toLowerCase().includes(ql) || a.ean?.includes(ql)) {
+        if (!risultati.find(r => r.tipo === 'articolo' && r.id === a.id)) risultati.push({ tipo: 'articolo', ...a })
+      }
+    })
+    variantiDB.forEach(v => {
+      if (v.ean?.toLowerCase().includes(ql) || v.codice_variante?.toLowerCase().includes(ql)) {
+        const art = articoliDB.find(a => a.id === v.articolo_id)
+        if (art && !risultati.find(r => r.tipo === 'variante' && r.id === v.id)) risultati.push({ tipo: 'variante', ...v, _art: art })
+      }
+    })
+    setRisultatiArt(risultati.slice(0, 15))
+    setShowRisultati(risultati.length > 0)
+  }, [articoliDB, variantiDB])
 
-  function aggiornaRiga(idx: number, field: string, value: any) {
-    const newRighe = [...righe]
-    newRighe[idx] = calcolaRiga({ ...newRighe[idx], [field]: value })
-    setRighe(newRighe)
-  }
+  useEffect(() => {
+    const t = setTimeout(() => eseguiRicerca(cercaArt), 150)
+    return () => clearTimeout(t)
+  }, [cercaArt, eseguiRicerca])
 
-  function rimuoviRiga(idx: number) {
-    if (righe.length === 1) { setRighe([{ ...emptyRiga }]); return }
-    setRighe(righe.filter((_, i) => i !== idx))
-  }
-
-  const totImponibile = righe.reduce((s, r) => s + (r.imponibile || 0), 0)
-  const totIva = righe.reduce((s, r) => s + ((r.importo || 0) - (r.imponibile || 0)), 0)
-  const totDocumento = righe.reduce((s, r) => s + (r.importo || 0), 0)
-
-  async function generaNumeroDoc(tipo: string) {
-    const anno = new Date().getFullYear()
-    const prefix = TIPI_DOC.find(t => t.id === tipo)?.prefix || 'DOC'
-    const { data } = await supabaseAdmin.from('documenti').select('numero_doc').eq('tipo', tipo).like('numero_doc', `${anno}_${prefix}%`).order('numero_doc', { ascending: false }).limit(1)
-    if (data && data.length > 0) {
-      const last = data[0].numero_doc
-      const num = parseInt(last.split('/').pop() || '0') + 1
-      return `${anno}_${prefix}${String(num).padStart(5, '0')}`
-    }
-    return `${anno}_${prefix}00001`
-  }
-
-  async function salvaDocumento() {
-    if (!form.tipo) { setError('Tipo documento obbligatorio'); return }
-    setSaving(true); setError(''); setSuccess('')
-    const { data: { user } } = await supabase.auth.getUser()
-    const uid = user?.id || USER_ID
-    let numDoc = docId ? (documenti.find(d => d.id === docId)?.numero_doc || '') : await generaNumeroDoc(form.tipo)
-    const payload = {
-      ...form, user_id: uid, numero_doc: numDoc, anno: new Date().getFullYear(),
-      totale_imponibile: totImponibile, totale_iva: totIva, totale_documento: totDocumento,
-      updated_at: new Date().toISOString(),
-      data_registrazione: form.data_registrazione || null,
-      data_documento: form.data_documento || null,
-      data_consegna: form.data_consegna || null,
-      data_scadenza: form.data_scadenza || null,
-    }
-    let docSalvato: any
-    if (docId) {
-      const { data, error: e } = await supabaseAdmin.from('documenti').update(payload).eq('id', docId).select().single()
-      if (e) { setError('Errore: ' + e.message); setSaving(false); return }
-      docSalvato = data
+  function aggiungiDaRisultato(item: any) {
+    let riga: RigaDoc
+    if (item.tipo === 'variante') {
+      const art = item._art
+      const prezzo = item.prezzo_override || getPrezzoListino(art)
+      const desc = `${art.nome} ${item.colore_nome ? '- ' + item.colore_nome : ''} ${item.misura_nome || ''}`.trim()
+      riga = { id: crypto.randomUUID(), articolo_id: art.id, variante_id: item.id, codice: item.codice_variante || item.ean || art.codice || '', descrizione: desc, um: art.um || 'Pz', qta: 1, prezzo, sconto1: 0, sconto2: 0, iva: art.iva || 22, importo: calcRiga(prezzo, 1, 0, 0, art.iva || 22) }
     } else {
-      const { data, error: e } = await supabaseAdmin.from('documenti').insert([payload]).select().single()
-      if (e) { setError('Errore: ' + e.message); setSaving(false); return }
-      docSalvato = data
+      const prezzo = getPrezzoListino(item)
+      riga = { id: crypto.randomUUID(), articolo_id: item.id, variante_id: null, codice: item.codice || item.ean || '', descrizione: item.nome, um: item.um || 'Pz', qta: 1, prezzo, sconto1: 0, sconto2: 0, iva: item.iva || 22, importo: calcRiga(prezzo, 1, 0, 0, item.iva || 22) }
     }
-    // Salva righe
-    if (docId) await supabaseAdmin.from('documenti_righe').delete().eq('documento_id', docId)
-    const righePayload = righe.filter(r => r.descrizione?.trim()).map((r, i) => ({
-      ...r, documento_id: docSalvato.id, user_id: uid, riga_num: i + 1
-    }))
-    if (righePayload.length > 0) await supabaseAdmin.from('documenti_righe').insert(righePayload)
-    // Mastino e scadenzario
-    if (form.cliente_id && ['preventivo', 'fattura', 'ordine', 'ddt'].includes(form.tipo) && !docId) {
-      const { data: lastMov } = await supabaseAdmin.from('mastino_clienti').select('saldo_progressivo').eq('cliente_id', form.cliente_id).order('created_at', { ascending: false }).limit(1)
-      const saldoPrecedente = lastMov?.[0]?.saldo_progressivo || 0
-      await supabaseAdmin.from('mastino_clienti').insert([{
-        user_id: uid, cliente_id: form.cliente_id, cliente_nome: form.cliente_nome,
-        documento_id: docSalvato.id, numero_doc: numDoc,
-        data_movimento: form.data_documento,
-        causale: `${TIPI_DOC.find(t => t.id === form.tipo)?.label} - ${numDoc}`,
-        tipo_movimento: 'dare', importo_dare: totDocumento, importo_avere: 0,
-        saldo_progressivo: saldoPrecedente + totDocumento,
-        data_scadenza: form.data_scadenza || null, pagato: false
-      }])
-      if (form.data_scadenza) {
-        await supabaseAdmin.from('scadenzario').insert([{
-          user_id: uid, cliente_id: form.cliente_id, cliente_nome: form.cliente_nome,
-          documento_id: docSalvato.id, numero_doc: numDoc,
-          data_scadenza: form.data_scadenza, importo: totDocumento, importo_residuo: totDocumento, pagato: false
-        }])
+    setRighe(prev => {
+      const idx = prev.findIndex(r => r.articolo_id === riga.articolo_id && r.variante_id === riga.variante_id)
+      if (idx >= 0) {
+        const up = [...prev]; const r = up[idx]; up[idx] = { ...r, qta: r.qta + 1, importo: calcRiga(r.prezzo, r.qta + 1, r.sconto1, r.sconto2, r.iva) }; return up
       }
-    }
-    setSuccess('Documento ' + numDoc + ' salvato!')
-    loadAll()
-    setTimeout(() => { setSuccess(''); setView('lista') }, 1500)
-    setSaving(false)
+      return [...prev, riga]
+    })
+    setCercaArt(''); setShowRisultati(false)
+    setTimeout(() => eanRef.current?.focus(), 100)
   }
 
-  async function apriDocumento(doc: any) {
-    setDocId(doc.id)
-    setForm({ tipo: doc.tipo, cliente_id: doc.cliente_id || '', cliente_nome: doc.cliente_nome || '', cliente_cf: doc.cliente_cf || '', data_registrazione: doc.data_registrazione || '', data_documento: doc.data_documento || '', data_consegna: doc.data_consegna || '', data_scadenza: doc.data_scadenza || '', pagamento: doc.pagamento || 'Contanti', listino: doc.listino || 'Base', agente: doc.agente || '', note: doc.note || '', stato: doc.stato || 'bozza' })
-    const { data: righeDoc } = await supabaseAdmin.from('documenti_righe').select('*').eq('documento_id', doc.id).order('riga_num')
-    setRighe(righeDoc && righeDoc.length > 0 ? righeDoc.map(r => calcolaRiga(r)) : [{ ...emptyRiga }])
-    setTabForm('testata')
+  function handleEanEnter(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key !== 'Enter') return
+    const val = (e.target as HTMLInputElement).value.trim()
+    if (!val) return
+    ;(e.target as HTMLInputElement).value = ''
+    const varMatch = variantiDB.find(v => v.ean === val || v.codice_variante === val)
+    if (varMatch) { const art = articoliDB.find(a => a.id === varMatch.articolo_id); if (art) { aggiungiDaRisultato({ tipo: 'variante', ...varMatch, _art: art }); return } }
+    const artMatch = articoliDB.find(a => a.ean === val || a.codice === val)
+    if (artMatch) { aggiungiDaRisultato({ tipo: 'articolo', ...artMatch }); return }
+    setError('Articolo non trovato: ' + val); setTimeout(() => setError(''), 3000)
+  }
+
+  function aggiornaRiga(id: string, campo: keyof RigaDoc, valore: any) {
+    setRighe(prev => prev.map(r => {
+      if (r.id !== id) return r
+      const up = { ...r, [campo]: valore }
+      up.importo = calcRiga(up.prezzo, up.qta, up.sconto1, up.sconto2, up.iva)
+      return up
+    }))
+  }
+
+  const totImponibile = righe.reduce((s, r) => s + r.importo / (1 + r.iva / 100), 0)
+  const totIva = righe.reduce((s, r) => s + r.importo - r.importo / (1 + r.iva / 100), 0)
+  const totale = righe.reduce((s, r) => s + r.importo, 0)
+
+  function selezionaCliente(c: any) {
+    setClienteId(c.id); setClienteNome(c.ragione_sociale || `${c.nome || ''} ${c.cognome || ''}`.trim())
+    setCercaCliente(''); setShowClienti(false)
+    if (c.listino) setListino(c.listino as any)
+  }
+
+  async function generaNumero(t: string) {
+    const anno = new Date().getFullYear()
+    const prefisso = t === 'preventivo' ? 'PV' : t === 'ordine' ? 'OR' : t === 'ddt' ? 'DDT' : t === 'fattura' ? 'FT' : 'DOC'
+    const { count } = await supabaseAdmin.from('documenti').select('*', { count: 'exact', head: true }).eq('tipo', t).gte('created_at', anno + '-01-01')
+    return `${anno}-${prefisso}-${String((count || 0) + 1).padStart(5, '0')}`
+  }
+
+  async function apriNuovoDoc() {
+    const num = await generaNumero('preventivo')
+    setEditId(null); setTipo('preventivo'); setNumero(num)
+    setDataDoc(new Date().toISOString().split('T')[0]); setDataReg(new Date().toISOString().split('T')[0])
+    setClienteId(''); setClienteNome(''); setCercaCliente('')
+    setListino('base'); setPagamento('contanti'); setNoteDoc(''); setRighe([])
+    setView('form')
+    setTimeout(() => eanRef.current?.focus(), 300)
+  }
+
+  async function apriModificaDoc(doc: any) {
+    setEditId(doc.id); setTipo(doc.tipo || 'preventivo'); setNumero(doc.numero || '')
+    setDataDoc(doc.data_documento || ''); setDataReg(doc.data_registrazione || '')
+    setClienteId(doc.cliente_id || ''); setClienteNome(doc.cliente_nome || '')
+    setListino(doc.listino || 'base'); setPagamento(doc.pagamento || 'contanti'); setNoteDoc(doc.note || '')
+    const { data: righeDB } = await supabaseAdmin.from('righe_documento').select('*').eq('documento_id', doc.id).order('riga_numero')
+    setRighe((righeDB || []).map(r => ({
+      id: r.id, articolo_id: r.articolo_id, variante_id: r.variante_id,
+      codice: r.codice || '', descrizione: r.descrizione || '', um: r.um || 'Pz',
+      qta: r.qta || 1, prezzo: r.prezzo_unitario || 0, sconto1: r.sconto1 || 0, sconto2: r.sconto2 || 0,
+      iva: r.iva_perc || 22, importo: r.importo_riga || 0
+    })))
     setView('form')
   }
 
-  async function eliminaDocumento(id: string) {
-    if (!confirm('Eliminare questo documento?')) return
-    await supabaseAdmin.from('documenti_righe').delete().eq('documento_id', id)
-    const { error } = await supabaseAdmin.from('documenti').delete().eq('id', id)
-    if (error) setError('Errore: ' + error.message)
-    else { setSuccess('Documento eliminato'); loadAll() }
+  async function salvaDocumento(statoSalvataggio: string) {
+    if (!clienteNome && !clienteId) { setError('Seleziona un cliente'); return }
+    if (righe.length === 0) { setError('Aggiungi almeno un articolo'); return }
+    setSaving(true); setError('')
+    const { data: { user } } = await supabase.auth.getUser()
+    const uid = user?.id || USER_ID
+    const payload: any = {
+      user_id: uid, tipo, numero, data_documento: dataDoc || null, data_registrazione: dataReg || null,
+      cliente_id: clienteId || null, cliente_nome: clienteNome,
+      listino, pagamento, note: noteDoc || null, stato: statoSalvataggio,
+      totale_imponibile: Math.round(totImponibile * 100) / 100,
+      totale_iva: Math.round(totIva * 100) / 100,
+      totale_documento: Math.round(totale * 100) / 100,
+    }
+    let docId = editId
+    if (editId) {
+      const { error: e } = await supabaseAdmin.from('documenti').update(payload).eq('id', editId)
+      if (e) { setError('Errore: ' + e.message); setSaving(false); return }
+      await supabaseAdmin.from('righe_documento').delete().eq('documento_id', editId)
+    } else {
+      const { data: doc, error: e } = await supabaseAdmin.from('documenti').insert([payload]).select().single()
+      if (e || !doc) { setError('Errore: ' + (e?.message || '')); setSaving(false); return }
+      docId = doc.id
+    }
+    // Salva righe
+    await supabaseAdmin.from('righe_documento').insert(righe.map((r, i) => ({
+      documento_id: docId, user_id: uid, riga_num: i + 1,
+      articolo_id: r.articolo_id, variante_id: r.variante_id,
+      codice: r.codice, descrizione: r.descrizione, um: r.um,
+      qta: r.qta, prezzo: r.prezzo, sconto1: r.sconto1, sconto2: r.sconto2, iva_perc: r.iva,
+      importo: r.importo
+    })))
+    // Se confermato: crea movimento dare nel mastino (credito verso cliente)
+    if (statoSalvataggio === 'confermato' && clienteId && !editId) {
+      await supabaseAdmin.from('mastino_clienti').insert([{
+        user_id: uid, cliente_id: clienteId, cliente_nome: clienteNome,
+        data_movimento: dataDoc || new Date().toISOString().split('T')[0],
+        tipo_movimento: 'dare', descrizione: `${tipo.toUpperCase()} ${numero}`,
+        importo_dare: totale, importo_avere: 0, documento_id: docId, numero_doc: numero
+      }])
+    }
+    setSuccess(editId ? 'Documento aggiornato!' : 'Documento salvato!')
+    loadAll(); setView('lista')
+    setSaving(false)
   }
 
-  const docFiltrati = documenti.filter(d => {
-    if (filtroTipo !== 'tutti' && d.tipo !== filtroTipo) return false
-    if (filtroStato !== 'tutti' && d.stato !== filtroStato) return false
-    if (filtroDal && d.data_documento < filtroDal) return false
-    if (filtroAl && d.data_documento > filtroAl) return false
-    if (filtroCliente && !d.cliente_nome?.toLowerCase().includes(filtroCliente.toLowerCase())) return false
-    if (cerca && !d.numero_doc?.toLowerCase().includes(cerca.toLowerCase()) && !d.cliente_nome?.toLowerCase().includes(cerca.toLowerCase())) return false
-    return true
+  async function eliminaDoc(id: string) {
+    if (!confirm('Eliminare questo documento?')) return
+    await supabaseAdmin.from('righe_documento').delete().eq('documento_id', id)
+    await supabaseAdmin.from('documenti').delete().eq('id', id)
+    loadAll()
+  }
+
+  const docsFiltrati = documenti.filter(d => {
+    const matchTipo = filtroTipo === 'tutti' || d.tipo === filtroTipo
+    const matchStato = filtroStato === 'tutti' || d.stato === filtroStato
+    const matchCerca = !filtroCerca || d.numero?.toLowerCase().includes(filtroCerca.toLowerCase()) || d.cliente_nome?.toLowerCase().includes(filtroCerca.toLowerCase())
+    const matchDal = !filtroDal || d.data_documento >= filtroDal
+    const matchAl = !filtroAl || d.data_documento <= filtroAl
+    return matchTipo && matchStato && matchCerca && matchDal && matchAl
   })
 
-  const totFiltrati = docFiltrati.reduce((s, d) => s + (d.totale_documento || 0), 0)
-
-  const Err = () => error ? <div style={{ background: '#fee2e2', color: '#991b1b', padding: 12, borderRadius: 8, marginBottom: 12 }}>{error} <button onClick={() => setError('')} style={{ background: 'none', border: 'none', cursor: 'pointer', float: 'right' }}>x</button></div> : null
-  const Suc = () => success ? <div style={{ background: '#d1fae5', color: '#065f46', padding: 12, borderRadius: 8, marginBottom: 12 }}>{success}</div> : null
+  const statoColor: Record<string, string> = { bozza:'#e2e8f0', aperto:'#dbeafe', confermato:'#d1fae5', sospeso:'#fef3c7', incassato:'#dcfce7', annullato:'#fee2e2' }
+  const statoTextColor: Record<string, string> = { bozza:'#64748b', aperto:'#1d4ed8', confermato:'#065f46', sospeso:'#92400e', incassato:'#14532d', annullato:'#991b1b' }
+  const clientiFiltrati = clienti.filter(c => { const n = (c.ragione_sociale || `${c.nome||''} ${c.cognome||''}`).toLowerCase(); return n.includes(cercaCliente.toLowerCase()) }).slice(0, 8)
 
   if (view === 'form') return (
-    <div style={{ padding: 16, maxWidth: 1200, margin: '0 auto' }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, flexWrap: 'wrap', gap: 10 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <button onClick={() => { setView('lista'); setDocId(null); setForm({ ...emptyForm }); setRighe([{ ...emptyRiga }]) }} style={btn('#64748b')}>Indietro</button>
-          <h1 style={{ margin: 0, fontSize: 20, fontWeight: 700 }}>{docId ? 'Modifica Documento' : 'Nuovo Documento'}</h1>
+    <div style={{ display:'flex', height:'calc(100vh - 64px)', background:'#f1f5f9', overflow:'hidden' }}>
+      {/* Sinistra: form testata */}
+      <div style={{ width:300, background:'#fff', borderRight:'1px solid #e2e8f0', overflowY:'auto', flexShrink:0 }}>
+        <div style={{ padding:'14px 16px', borderBottom:'1px solid #e2e8f0', display:'flex', alignItems:'center', gap:10 }}>
+          <button onClick={()=>setView('lista')} style={btn('#64748b',{ padding:'6px 12px', fontSize:12 })}>← Indietro</button>
+          <h2 style={{ margin:0, fontSize:16, fontWeight:700 }}>{editId?'Modifica':'Nuovo'} Documento</h2>
         </div>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <div style={{ background: '#f0fdf4', border: '1px solid #86efac', borderRadius: 8, padding: '6px 16px', fontSize: 14, fontWeight: 700, color: '#166534' }}>
-            Tot: euro{totDocumento.toFixed(2)}
+        {error && <div style={{ background:'#fee2e2', color:'#991b1b', padding:'10px 14px', fontSize:12 }}>{error} <button onClick={()=>setError('')} style={{ background:'none', border:'none', cursor:'pointer', float:'right' }}>×</button></div>}
+        <div style={{ padding:'14px 16px', display:'flex', flexDirection:'column', gap:10 }}>
+          {/* Tipo */}
+          <div>
+            <label style={{ fontSize:11, fontWeight:600, color:'#64748b', display:'block', marginBottom:4 }}>TIPO DOCUMENTO</label>
+            <select style={inp()} value={tipo} onChange={async e=>{setTipo(e.target.value);if(!editId){const n=await generaNumero(e.target.value);setNumero(n)}}}>
+              {['preventivo','ordine','ddt','fattura','nota_credito','scontrino'].map(t=><option key={t} value={t}>{t.replace('_',' ').toUpperCase()}</option>)}
+            </select>
           </div>
-          <button onClick={salvaDocumento} disabled={saving} style={btn('#10b981', { padding: '8px 24px' })}>{saving ? 'Salvataggio...' : 'Salva Documento'}</button>
+          {/* Numero */}
+          <div>
+            <label style={{ fontSize:11, fontWeight:600, color:'#64748b', display:'block', marginBottom:4 }}>NUMERO DOCUMENTO</label>
+            <input style={inp()} value={numero} onChange={e=>setNumero(e.target.value)} placeholder="Auto-generato"/>
+          </div>
+          {/* Date */}
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8 }}>
+            <div><label style={{ fontSize:11, fontWeight:600, color:'#64748b', display:'block', marginBottom:4 }}>DATA DOC.</label><input type="date" style={inp()} value={dataDoc} onChange={e=>setDataDoc(e.target.value)}/></div>
+            <div><label style={{ fontSize:11, fontWeight:600, color:'#64748b', display:'block', marginBottom:4 }}>DATA REG.</label><input type="date" style={inp()} value={dataReg} onChange={e=>setDataReg(e.target.value)}/></div>
+          </div>
+          {/* Cliente */}
+          <div style={{ position:'relative' }}>
+            <label style={{ fontSize:11, fontWeight:600, color:'#64748b', display:'block', marginBottom:4 }}>CLIENTE *</label>
+            <input value={clienteNome||cercaCliente} onChange={e=>{setCercaCliente(e.target.value);setClienteId('');setClienteNome('');setShowClienti(true)}} onFocus={()=>setShowClienti(true)} placeholder="Cerca cliente..." style={inp()}/>
+            {showClienti && cercaCliente && clientiFiltrati.length > 0 && (
+              <div style={{ position:'absolute', top:'100%', left:0, right:0, background:'#fff', border:'1px solid #e2e8f0', borderRadius:8, zIndex:50, boxShadow:'0 4px 16px rgba(0,0,0,0.1)', maxHeight:180, overflowY:'auto' }}>
+                {clientiFiltrati.map(c=>(
+                  <div key={c.id} onClick={()=>selezionaCliente(c)} style={{ padding:'8px 12px', cursor:'pointer', fontSize:13, borderBottom:'1px solid #f1f5f9' }} onMouseEnter={e=>(e.currentTarget.style.background='#f0f9ff')} onMouseLeave={e=>(e.currentTarget.style.background='#fff')}>
+                    {c.ragione_sociale || `${c.nome||''} ${c.cognome||''}`.trim()}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+          {/* Listino */}
+          <div>
+            <label style={{ fontSize:11, fontWeight:600, color:'#64748b', display:'block', marginBottom:4 }}>LISTINO</label>
+            <div style={{ display:'flex', gap:4 }}>
+              {(['base','ingrosso','promo','vip'] as const).map(l=>(
+                <button key={l} onClick={()=>setListino(l)} style={{ flex:1, padding:'5px 2px', border:'1px solid #e2e8f0', borderRadius:6, cursor:'pointer', fontSize:11, fontWeight:listino===l?700:400, background:listino===l?'#3b82f6':'#f8fafc', color:listino===l?'#fff':'#374151', textTransform:'capitalize' }}>{l}</button>
+              ))}
+            </div>
+          </div>
+          {/* Pagamento */}
+          <div>
+            <label style={{ fontSize:11, fontWeight:600, color:'#64748b', display:'block', marginBottom:4 }}>PAGAMENTO</label>
+            <select style={inp()} value={pagamento} onChange={e=>setPagamento(e.target.value)}>
+              {['contanti','carta','bonifico','assegno','riba','rimessa diretta'].map(p=><option key={p} value={p}>{p.toUpperCase()}</option>)}
+            </select>
+          </div>
+          {/* Note */}
+          <div>
+            <label style={{ fontSize:11, fontWeight:600, color:'#64748b', display:'block', marginBottom:4 }}>NOTE</label>
+            <textarea style={{ ...inp(), height:60, resize:'vertical' }} value={noteDoc} onChange={e=>setNoteDoc(e.target.value)} placeholder="Note documento..."/>
+          </div>
+          {/* Totali */}
+          <div style={{ background:'#f8fafc', borderRadius:10, padding:12, marginTop:4 }}>
+            <div style={{ display:'flex', justifyContent:'space-between', fontSize:12, color:'#64748b', marginBottom:4 }}><span>Imponibile</span><span>€{totImponibile.toFixed(2)}</span></div>
+            <div style={{ display:'flex', justifyContent:'space-between', fontSize:12, color:'#64748b', marginBottom:8 }}><span>IVA</span><span>€{totIva.toFixed(2)}</span></div>
+            <div style={{ display:'flex', justifyContent:'space-between', fontSize:20, fontWeight:800, color:'#1e293b', borderTop:'1px solid #e2e8f0', paddingTop:8 }}><span>TOTALE</span><span>€{totale.toFixed(2)}</span></div>
+          </div>
+          {/* Bottoni salvataggio */}
+          <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+            <button onClick={()=>salvaDocumento('bozza')} disabled={saving} style={btn('#64748b',{ padding:'10px' })}>💾 Salva Bozza</button>
+            <button onClick={()=>salvaDocumento('confermato')} disabled={saving} style={btn('#3b82f6',{ padding:'10px' })}>✓ Conferma Documento</button>
+          </div>
         </div>
       </div>
-      <Err /><Suc />
 
-      {/* Tab */}
-      <div style={{ display: 'flex', gap: 4, marginBottom: 16, borderBottom: '2px solid #e2e8f0' }}>
-        {[['testata', 'Testata'], ['righe', 'Righe Articoli'], ['scadenze', 'Scadenze']].map(([t, label]) => (
-          <button key={t} onClick={() => setTabForm(t as any)} style={{ background: 'none', border: 'none', padding: '10px 20px', cursor: 'pointer', fontWeight: tabForm === t ? 700 : 400, color: tabForm === t ? '#3b82f6' : '#64748b', borderBottom: tabForm === t ? '2px solid #3b82f6' : '2px solid transparent', marginBottom: -2 }}>{label}</button>
-        ))}
-      </div>
-
-      {tabForm === 'testata' && (
-        <div style={{ background: '#fff', borderRadius: 12, padding: 20, boxShadow: '0 2px 8px rgba(0,0,0,0.06)' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 14 }}>
-            <div>
-              <label style={{ fontSize: 12, color: '#64748b', display: 'block', marginBottom: 4 }}>Tipo Documento *</label>
-              <select style={inp()} value={form.tipo} onChange={e => setForm(p => ({ ...p, tipo: e.target.value }))}>
-                {TIPI_DOC.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
-              </select>
-            </div>
-            <div>
-              <label style={{ fontSize: 12, color: '#64748b', display: 'block', marginBottom: 4 }}>Listino</label>
-              <select style={inp()} value={form.listino} onChange={e => setForm(p => ({ ...p, listino: e.target.value }))}>
-                {LISTINI.map(l => <option key={l}>{l}</option>)}
-              </select>
-            </div>
-            <div>
-              <label style={{ fontSize: 12, color: '#64748b', display: 'block', marginBottom: 4 }}>Pagamento</label>
-              <select style={inp()} value={form.pagamento} onChange={e => setForm(p => ({ ...p, pagamento: e.target.value }))}>
-                {PAGAMENTI.map(p => <option key={p}>{p}</option>)}
-              </select>
-            </div>
-            <div>
-              <label style={{ fontSize: 12, color: '#64748b', display: 'block', marginBottom: 4 }}>Stato</label>
-              <select style={inp()} value={form.stato} onChange={e => setForm(p => ({ ...p, stato: e.target.value }))}>
-                {['bozza', 'confermato', 'spedito', 'fatturato', 'annullato'].map(s => <option key={s}>{s}</option>)}
-              </select>
-            </div>
-            <div style={{ gridColumn: '1/-1' }}>
-              <label style={{ fontSize: 12, color: '#64748b', display: 'block', marginBottom: 4 }}>Cliente</label>
-              <select style={inp()} value={form.cliente_id} onChange={e => {
-                const cl = clienti.find(c => c.id === e.target.value)
-                setForm(p => ({ ...p, cliente_id: e.target.value, cliente_nome: cl?.nome || '', listino: cl?.listino || p.listino }))
-              }}>
-                <option value="">-- Seleziona cliente --</option>
-                {clienti.map(c => <option key={c.id} value={c.id}>{c.nome}{c.piva ? ` (P.IVA: ${c.piva})` : ''}</option>)}
-              </select>
-            </div>
-            <div>
-              <label style={{ fontSize: 12, color: '#64748b', display: 'block', marginBottom: 4 }}>Data Registrazione</label>
-              <input type="date" style={inp()} value={form.data_registrazione} onChange={e => setForm(p => ({ ...p, data_registrazione: e.target.value }))} />
-            </div>
-            <div>
-              <label style={{ fontSize: 12, color: '#64748b', display: 'block', marginBottom: 4 }}>Data Documento</label>
-              <input type="date" style={inp()} value={form.data_documento} onChange={e => setForm(p => ({ ...p, data_documento: e.target.value }))} />
-            </div>
-            <div>
-              <label style={{ fontSize: 12, color: '#64748b', display: 'block', marginBottom: 4 }}>Data Consegna</label>
-              <input type="date" style={inp()} value={form.data_consegna} onChange={e => setForm(p => ({ ...p, data_consegna: e.target.value }))} />
-            </div>
-            <div>
-              <label style={{ fontSize: 12, color: '#64748b', display: 'block', marginBottom: 4 }}>Agente</label>
-              <input style={inp()} value={form.agente} onChange={e => setForm(p => ({ ...p, agente: e.target.value }))} placeholder="Nome agente" />
-            </div>
-            <div style={{ gridColumn: '1/-1' }}>
-              <label style={{ fontSize: 12, color: '#64748b', display: 'block', marginBottom: 4 }}>Note</label>
-              <textarea style={{ ...inp(), height: 60, resize: 'vertical' }} value={form.note} onChange={e => setForm(p => ({ ...p, note: e.target.value }))} placeholder="Note documento..." />
-            </div>
+      {/* Destra: righe documento */}
+      <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden' }}>
+        {/* Barra ricerca articolo */}
+        <div style={{ background:'#1e293b', padding:'10px 16px', display:'flex', gap:10, alignItems:'center', flexShrink:0 }}>
+          <div style={{ flex:1, position:'relative' }}>
+            <input ref={eanRef} onKeyDown={handleEanEnter} placeholder="Scan EAN / Codice + INVIO per aggiungere..." style={{ width:'100%', background:'#334155', border:'none', borderRadius:8, padding:'9px 12px', fontSize:13, color:'#fff', boxSizing:'border-box', outline:'none' }} autoComplete="off"/>
           </div>
+          <div style={{ flex:2, position:'relative' }}>
+            <input value={cercaArt} onChange={e=>setCercaArt(e.target.value)} onFocus={()=>cercaArt&&setShowRisultati(true)} placeholder="Cerca per nome, codice, EAN..." style={{ width:'100%', background:'#334155', border:'none', borderRadius:8, padding:'9px 12px', fontSize:13, color:'#fff', boxSizing:'border-box', outline:'none' }} autoComplete="off"/>
+            {showRisultati && risultatiArt.length > 0 && (
+              <div style={{ position:'absolute', top:'100%', left:0, right:0, background:'#fff', border:'1px solid #e2e8f0', borderRadius:8, zIndex:100, boxShadow:'0 8px 24px rgba(0,0,0,0.15)', maxHeight:300, overflowY:'auto' }}>
+                {risultatiArt.map((item,i)=>{
+                  const art = item.tipo==='variante' ? item._art : item
+                  const prezzo = item.tipo==='variante' ? (item.prezzo_override||getPrezzoListino(art)) : getPrezzoListino(item)
+                  const desc = item.tipo==='variante' ? `${art.nome} ${item.colore_nome?'- '+item.colore_nome:''} ${item.misura_nome||''}`.trim() : item.nome
+                  return (
+                    <div key={i} onClick={()=>aggiungiDaRisultato(item)} style={{ padding:'9px 14px', cursor:'pointer', borderBottom:'1px solid #f1f5f9', display:'flex', justifyContent:'space-between', alignItems:'center' }} onMouseEnter={e=>(e.currentTarget.style.background='#eff6ff')} onMouseLeave={e=>(e.currentTarget.style.background='#fff')}>
+                      <div>
+                        <div style={{ fontSize:13, fontWeight:600 }}>{desc}</div>
+                        <div style={{ fontSize:11, color:'#94a3b8' }}>{item.tipo==='variante'?`EAN: ${item.ean||'--'}`:`Cod: ${item.codice||'--'} | EAN: ${item.ean||'--'}`}</div>
+                      </div>
+                      <div style={{ fontSize:14, fontWeight:700, color:'#10b981', marginLeft:12 }}>€{Number(prezzo).toFixed(2)}</div>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+          <div style={{ color:'#94a3b8', fontSize:12, whiteSpace:'nowrap' }}>{righe.length} righe</div>
         </div>
-      )}
 
-      {tabForm === 'righe' && (
-        <div>
-          {/* Barcode scanner */}
-          <div style={{ background: '#1e293b', borderRadius: 12, padding: 14, marginBottom: 16, display: 'flex', alignItems: 'center', gap: 12 }}>
-            <span style={{ color: '#94a3b8', fontSize: 13 }}>Scan EAN/Barcode:</span>
-            <input ref={barcodeRef} onKeyDown={handleBarcodeInput} style={{ flex: 1, background: '#0f172a', border: '1px solid #334155', borderRadius: 8, padding: '8px 14px', fontSize: 14, color: '#f1f5f9', outline: 'none' }} placeholder="Scansiona o digita codice e premi INVIO..." autoFocus />
-            <span style={{ color: '#64748b', fontSize: 12 }}>Listino: <b style={{ color: '#60a5fa' }}>{form.listino}</b></span>
-          </div>
-
-          {/* Tabella righe */}
-          <div style={{ background: '#fff', borderRadius: 12, boxShadow: '0 2px 8px rgba(0,0,0,0.06)', overflow: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 900 }}>
-              <thead>
-                <tr style={{ background: '#1e293b', color: '#fff' }}>
-                  {['#', 'Codice/EAN', 'Descrizione Articolo', 'Colore', 'Misura', 'UM', 'Qta', 'Prezzo', 'Sc1%', 'Sc2%', 'IVA%', 'Imponibile', 'Importo', ''].map(h => (
-                    <th key={h} style={{ padding: '10px 8px', textAlign: 'left', fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap' }}>{h}</th>
+        {/* Tabella righe */}
+        <div style={{ flex:1, overflowY:'auto', background:'#fff' }}>
+          {righe.length === 0 ? (
+            <div style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', height:'100%', color:'#94a3b8' }}>
+              <div style={{ fontSize:48, marginBottom:12 }}>📋</div>
+              <div style={{ fontSize:16, fontWeight:600 }}>Nessuna riga</div>
+              <div style={{ fontSize:13, marginTop:4 }}>Scansiona EAN o cerca articolo nella barra sopra</div>
+            </div>
+          ) : (
+            <table style={{ width:'100%', borderCollapse:'collapse' }}>
+              <thead style={{ position:'sticky', top:0, zIndex:10 }}>
+                <tr style={{ background:'#f8fafc' }}>
+                  {['#','Codice','Descrizione','UM','Qta','Prezzo','Sc1%','Sc2%','IVA%','Importo',''].map(h=>(
+                    <th key={h} style={{ padding:'8px 8px', textAlign:'left', fontSize:11, fontWeight:600, color:'#64748b', borderBottom:'1px solid #e2e8f0', whiteSpace:'nowrap' }}>{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {righe.map((r, idx) => (
-                  <tr key={idx} style={{ borderBottom: '1px solid #f1f5f9', background: idx % 2 === 0 ? '#fff' : '#f8fafc' }}>
-                    <td style={{ padding: '6px 8px', fontSize: 12, color: '#94a3b8', width: 30 }}>{idx + 1}</td>
-                    <td style={{ padding: '4px 6px', width: 120 }}>
-                      <input style={{ ...inp({ fontSize: 12, padding: '5px 8px' }), fontFamily: 'monospace' }} value={r.codice || r.ean || ''} onChange={e => {
-                        const found = cercaPerEanOCodice(e.target.value)
-                        if (found) aggiungiRigaDaArticolo(found.art, found.variante, idx)
-                        else aggiornaRiga(idx, 'codice', e.target.value)
-                      }} placeholder="Codice/EAN" />
-                    </td>
-                    <td style={{ padding: '4px 6px', minWidth: 200, position: 'relative' }}>
-                      <input style={inp({ fontSize: 12, padding: '5px 8px' })} value={rigaAttiva === idx ? cercaArticolo : r.descrizione} onChange={e => { handleCercaArticolo(e.target.value, idx) }} onFocus={() => { setRigaAttiva(idx); setCercaArticolo(r.descrizione) }} onBlur={() => setTimeout(() => { setRigaAttiva(null); setSuggerimentiArt([]) }, 200)} placeholder="Cerca articolo..." />
-                      {rigaAttiva === idx && suggerimentiArt.length > 0 && (
-                        <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, background: '#fff', border: '1px solid #e2e8f0', borderRadius: 8, boxShadow: '0 8px 24px rgba(0,0,0,0.12)', zIndex: 1000, maxHeight: 240, overflowY: 'auto' }}>
-                          {suggerimentiArt.map((s, i) => (
-                            <div key={i} onMouseDown={() => aggiungiRigaDaArticolo(s.art, s.variante, idx)} style={{ padding: '10px 14px', cursor: 'pointer', borderBottom: '1px solid #f1f5f9', fontSize: 13 }} onMouseEnter={e => (e.currentTarget.style.background = '#f0f9ff')} onMouseLeave={e => (e.currentTarget.style.background = '#fff')}>
-                              <div style={{ fontWeight: 600 }}>{s.label}</div>
-                              <div style={{ fontSize: 11, color: '#64748b' }}>euro{getPrezzoListino(s.art, form.listino).toFixed(2)} · IVA {s.art.iva}%</div>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </td>
-                    <td style={{ padding: '4px 6px', width: 80 }}><input style={inp({ fontSize: 12, padding: '5px 8px' })} value={r.colore_nome || ''} onChange={e => aggiornaRiga(idx, 'colore_nome', e.target.value)} placeholder="Colore" /></td>
-                    <td style={{ padding: '4px 6px', width: 70 }}><input style={inp({ fontSize: 12, padding: '5px 8px' })} value={r.misura_nome || ''} onChange={e => aggiornaRiga(idx, 'misura_nome', e.target.value)} placeholder="Mis." /></td>
-                    <td style={{ padding: '4px 6px', width: 50 }}><input style={inp({ fontSize: 12, padding: '5px 8px' })} value={r.um || 'Pz'} onChange={e => aggiornaRiga(idx, 'um', e.target.value)} /></td>
-                    <td style={{ padding: '4px 6px', width: 60 }}><input type="number" style={inp({ fontSize: 12, padding: '5px 8px' })} value={r.qta} onChange={e => aggiornaRiga(idx, 'qta', Number(e.target.value))} min={0} /></td>
-                    <td style={{ padding: '4px 6px', width: 80 }}><input type="number" step="0.01" style={inp({ fontSize: 12, padding: '5px 8px' })} value={r.prezzo} onChange={e => aggiornaRiga(idx, 'prezzo', Number(e.target.value))} /></td>
-                    <td style={{ padding: '4px 6px', width: 55 }}><input type="number" step="0.1" style={inp({ fontSize: 12, padding: '5px 8px' })} value={r.sconto1} onChange={e => aggiornaRiga(idx, 'sconto1', Number(e.target.value))} /></td>
-                    <td style={{ padding: '4px 6px', width: 55 }}><input type="number" step="0.1" style={inp({ fontSize: 12, padding: '5px 8px' })} value={r.sconto2} onChange={e => aggiornaRiga(idx, 'sconto2', Number(e.target.value))} /></td>
-                    <td style={{ padding: '4px 6px', width: 55 }}><input type="number" style={inp({ fontSize: 12, padding: '5px 8px' })} value={r.iva} onChange={e => aggiornaRiga(idx, 'iva', Number(e.target.value))} /></td>
-                    <td style={{ padding: '6px 8px', fontSize: 13, fontWeight: 600, color: '#374151', whiteSpace: 'nowrap' }}>euro{(r.imponibile || 0).toFixed(2)}</td>
-                    <td style={{ padding: '6px 8px', fontSize: 13, fontWeight: 700, color: '#1d4ed8', whiteSpace: 'nowrap' }}>euro{(r.importo || 0).toFixed(2)}</td>
-                    <td style={{ padding: '4px 6px' }}><button onClick={() => rimuoviRiga(idx)} style={{ background: '#fee2e2', color: '#ef4444', border: 'none', borderRadius: 6, padding: '4px 8px', cursor: 'pointer', fontSize: 16 }}>x</button></td>
+                {righe.map((r,i)=>(
+                  <tr key={r.id} style={{ borderBottom:'1px solid #f1f5f9', background:i%2===0?'#fff':'#fafafa' }}>
+                    <td style={{ padding:'6px 8px', fontSize:12, color:'#94a3b8', width:24 }}>{i+1}</td>
+                    <td style={{ padding:'6px 8px', width:90 }}><input value={r.codice} onChange={e=>aggiornaRiga(r.id,'codice',e.target.value)} style={{ width:'100%', border:'1px solid #e2e8f0', borderRadius:4, padding:'3px 5px', fontSize:12, fontFamily:'monospace' }}/></td>
+                    <td style={{ padding:'6px 8px', minWidth:180 }}><input value={r.descrizione} onChange={e=>aggiornaRiga(r.id,'descrizione',e.target.value)} style={{ width:'100%', border:'1px solid #e2e8f0', borderRadius:4, padding:'3px 5px', fontSize:13 }}/></td>
+                    <td style={{ padding:'6px 8px', width:50 }}><input value={r.um} onChange={e=>aggiornaRiga(r.id,'um',e.target.value)} style={{ width:'100%', border:'1px solid #e2e8f0', borderRadius:4, padding:'3px 5px', fontSize:12, textAlign:'center' }}/></td>
+                    <td style={{ padding:'6px 8px', width:70 }}><input type="number" step="0.01" value={r.qta} onChange={e=>aggiornaRiga(r.id,'qta',parseFloat(e.target.value)||0)} style={{ width:'100%', border:'1px solid #e2e8f0', borderRadius:4, padding:'3px 5px', fontSize:13, textAlign:'right' }}/></td>
+                    <td style={{ padding:'6px 8px', width:80 }}><input type="number" step="0.01" value={r.prezzo} onChange={e=>aggiornaRiga(r.id,'prezzo',parseFloat(e.target.value)||0)} style={{ width:'100%', border:'1px solid #e2e8f0', borderRadius:4, padding:'3px 5px', fontSize:13, textAlign:'right' }}/></td>
+                    <td style={{ padding:'6px 8px', width:55 }}><input type="number" step="0.1" value={r.sconto1} onChange={e=>aggiornaRiga(r.id,'sconto1',parseFloat(e.target.value)||0)} style={{ width:'100%', border:'1px solid #e2e8f0', borderRadius:4, padding:'3px 5px', fontSize:12, textAlign:'right' }}/></td>
+                    <td style={{ padding:'6px 8px', width:55 }}><input type="number" step="0.1" value={r.sconto2} onChange={e=>aggiornaRiga(r.id,'sconto2',parseFloat(e.target.value)||0)} style={{ width:'100%', border:'1px solid #e2e8f0', borderRadius:4, padding:'3px 5px', fontSize:12, textAlign:'right' }}/></td>
+                    <td style={{ padding:'6px 8px', width:55 }}><select value={r.iva} onChange={e=>aggiornaRiga(r.id,'iva',Number(e.target.value))} style={{ width:'100%', border:'1px solid #e2e8f0', borderRadius:4, padding:'3px 4px', fontSize:12 }}>{[0,4,5,10,22].map(v=><option key={v} value={v}>{v}%</option>)}</select></td>
+                    <td style={{ padding:'6px 8px', fontSize:14, fontWeight:700, color:'#1e293b', whiteSpace:'nowrap', width:90 }}>€{r.importo.toFixed(2)}</td>
+                    <td style={{ padding:'6px 6px', width:28 }}><button onClick={()=>setRighe(prev=>prev.filter(x=>x.id!==r.id))} style={{ background:'none', border:'none', cursor:'pointer', color:'#ef4444', fontSize:18, lineHeight:1, padding:0 }}>×</button></td>
                   </tr>
                 ))}
               </tbody>
-              <tfoot>
-                <tr style={{ background: '#1e293b', color: '#fff' }}>
-                  <td colSpan={11} style={{ padding: '10px 14px', fontSize: 13, fontWeight: 600 }}>TOTALI ({righe.filter(r => r.descrizione).length} righe)</td>
-                  <td style={{ padding: '10px 8px', fontSize: 14, fontWeight: 700 }}>euro{totImponibile.toFixed(2)}</td>
-                  <td style={{ padding: '10px 8px', fontSize: 14, fontWeight: 700 }}>euro{totDocumento.toFixed(2)}</td>
-                  <td></td>
-                </tr>
-              </tfoot>
             </table>
-          </div>
-          <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
-            <button onClick={() => setRighe(r => [...r, { ...emptyRiga }])} style={btn('#64748b', { fontSize: 13 })}>+ Aggiungi Riga</button>
-            <span style={{ alignSelf: 'center', fontSize: 13, color: '#64748b' }}>IVA: euro{totIva.toFixed(2)} · Imponibile: euro{totImponibile.toFixed(2)} · <b>Totale: euro{totDocumento.toFixed(2)}</b></span>
-          </div>
+          )}
         </div>
-      )}
-
-      {tabForm === 'scadenze' && (
-        <div style={{ background: '#fff', borderRadius: 12, padding: 20, boxShadow: '0 2px 8px rgba(0,0,0,0.06)' }}>
-          <h3 style={{ margin: '0 0 16px', fontSize: 16 }}>Scadenza Pagamento</h3>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 14 }}>
-            <div>
-              <label style={{ fontSize: 12, color: '#64748b', display: 'block', marginBottom: 4 }}>Data Scadenza</label>
-              <input type="date" style={inp()} value={form.data_scadenza} onChange={e => setForm(p => ({ ...p, data_scadenza: e.target.value }))} />
-            </div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'flex-end' }}>
-              {[30, 60, 90].map(gg => (
-                <button key={gg} onClick={() => {
-                  const d = new Date(form.data_documento || new Date())
-                  d.setDate(d.getDate() + gg)
-                  setForm(p => ({ ...p, data_scadenza: d.toISOString().split('T')[0] }))
-                }} style={{ ...btn('#64748b', { fontSize: 13 }), padding: '8px 14px' }}>+{gg}gg</button>
-              ))}
-              <button onClick={() => {
-                const d = new Date(form.data_documento || new Date())
-                d.setMonth(d.getMonth() + 1, 0)
-                setForm(p => ({ ...p, data_scadenza: d.toISOString().split('T')[0] }))
-              }} style={{ ...btn('#64748b', { fontSize: 13 }), padding: '8px 14px' }}>Fine mese</button>
-            </div>
-          </div>
-          <div style={{ marginTop: 16, padding: 16, background: '#f8fafc', borderRadius: 8 }}>
-            <div style={{ fontSize: 14 }}>Importo da pagare: <b style={{ fontSize: 18, color: '#1d4ed8' }}>euro{totDocumento.toFixed(2)}</b></div>
-            {form.data_scadenza && <div style={{ fontSize: 13, color: '#64748b', marginTop: 4 }}>Scadenza: {new Date(form.data_scadenza).toLocaleDateString('it-IT')}</div>}
-          </div>
-        </div>
-      )}
+      </div>
     </div>
   )
 
-  // LISTA
+  // LISTA DOCUMENTI
   return (
-    <div style={{ padding: 20 }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20, flexWrap: 'wrap', gap: 12 }}>
+    <div style={{ padding:24 }}>
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:20, flexWrap:'wrap', gap:12 }}>
         <div>
-          <h1 style={{ margin: 0, fontSize: 26, fontWeight: 700 }}>Gestione Documenti</h1>
-          <p style={{ margin: 0, fontSize: 14, color: '#64748b' }}>Preventivi, Ordini, DDT, Fatture, Incassi</p>
+          <h1 style={{ margin:0, fontSize:24, fontWeight:700 }}>Gestione Documenti</h1>
+          <p style={{ margin:0, fontSize:13, color:'#64748b' }}>Preventivi, Ordini, DDT, Fatture</p>
         </div>
-        <button onClick={() => { setDocId(null); setForm({ ...emptyForm }); setRighe([{ ...emptyRiga }]); setTabForm('testata'); setView('form') }} style={btn('#3b82f6')}>+ Nuovo Documento</button>
+        <button onClick={apriNuovoDoc} style={btn('#3b82f6',{ padding:'10px 20px', fontSize:14 })}>+ Nuovo Documento</button>
       </div>
-      <Err /><Suc />
-
+      {success && <div style={{ background:'#d1fae5', color:'#065f46', padding:'10px 16px', borderRadius:8, marginBottom:16, fontSize:13 }}>{success}</div>}
       {/* Filtri */}
-      <div style={{ background: '#fff', borderRadius: 12, padding: 16, marginBottom: 16, boxShadow: '0 1px 4px rgba(0,0,0,0.06)', display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-        <input style={{ ...inp(), maxWidth: 220 }} value={cerca} onChange={e => setCerca(e.target.value)} placeholder="Cerca numero o cliente..." />
-        <select style={{ ...inp(), maxWidth: 160 }} value={filtroTipo} onChange={e => setFiltroTipo(e.target.value)}>
-          <option value="tutti">Tutti i tipi</option>
-          {TIPI_DOC.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
-        </select>
-        <select style={{ ...inp(), maxWidth: 140 }} value={filtroStato} onChange={e => setFiltroStato(e.target.value)}>
-          <option value="tutti">Tutti gli stati</option>
-          {['bozza', 'confermato', 'spedito', 'fatturato', 'annullato'].map(s => <option key={s}>{s}</option>)}
-        </select>
-        <input style={{ ...inp(), maxWidth: 160 }} value={filtroCliente} onChange={e => setFiltroCliente(e.target.value)} placeholder="Cliente..." />
-        <input type="date" style={{ ...inp(), maxWidth: 140 }} value={filtroDal} onChange={e => setFiltroDal(e.target.value)} />
-        <input type="date" style={{ ...inp(), maxWidth: 140 }} value={filtroAl} onChange={e => setFiltroAl(e.target.value)} />
-        <button onClick={() => { setCerca(''); setFiltroTipo('tutti'); setFiltroStato('tutti'); setFiltroDal(''); setFiltroAl(''); setFiltroCliente('') }} style={btn('#64748b', { fontSize: 13 })}>Reset</button>
-        <span style={{ fontSize: 13, color: '#64748b', marginLeft: 'auto' }}>{docFiltrati.length} doc · Tot: <b>euro{totFiltrati.toFixed(2)}</b></span>
+      <div style={{ background:'#fff', borderRadius:12, padding:'14px 16px', boxShadow:'0 1px 4px rgba(0,0,0,0.06)', marginBottom:16, display:'flex', gap:10, flexWrap:'wrap', alignItems:'flex-end' }}>
+        <div style={{ flex:2, minWidth:160 }}><label style={{ fontSize:11, fontWeight:600, color:'#64748b', display:'block', marginBottom:4 }}>CERCA</label><input style={inp()} value={filtroCerca} onChange={e=>setFiltroCerca(e.target.value)} placeholder="Numero, cliente..."/></div>
+        <div style={{ minWidth:130 }}><label style={{ fontSize:11, fontWeight:600, color:'#64748b', display:'block', marginBottom:4 }}>TIPO</label><select style={inp()} value={filtroTipo} onChange={e=>setFiltroTipo(e.target.value)}><option value="tutti">Tutti</option>{['preventivo','ordine','ddt','fattura','scontrino','nota_credito'].map(t=><option key={t} value={t}>{t.toUpperCase()}</option>)}</select></div>
+        <div style={{ minWidth:130 }}><label style={{ fontSize:11, fontWeight:600, color:'#64748b', display:'block', marginBottom:4 }}>STATO</label><select style={inp()} value={filtroStato} onChange={e=>setFiltroStato(e.target.value)}><option value="tutti">Tutti</option>{['bozza','aperto','confermato','sospeso','incassato','annullato'].map(s=><option key={s} value={s}>{s.toUpperCase()}</option>)}</select></div>
+        <div><label style={{ fontSize:11, fontWeight:600, color:'#64748b', display:'block', marginBottom:4 }}>DAL</label><input type="date" style={inp({minWidth:130})} value={filtroDal} onChange={e=>setFiltroDal(e.target.value)}/></div>
+        <div><label style={{ fontSize:11, fontWeight:600, color:'#64748b', display:'block', marginBottom:4 }}>AL</label><input type="date" style={inp({minWidth:130})} value={filtroAl} onChange={e=>setFiltroAl(e.target.value)}/></div>
+        <button onClick={()=>{setFiltroCerca('');setFiltroTipo('tutti');setFiltroStato('tutti');setFiltroDal('');setFiltroAl('')}} style={btn('#94a3b8',{ padding:'7px 14px', fontSize:12 })}>Reset</button>
+        <span style={{ fontSize:12, color:'#64748b', alignSelf:'center' }}>{docsFiltrati.length} doc.</span>
       </div>
-
       {/* Tabella */}
-      <div style={{ background: '#fff', borderRadius: 12, boxShadow: '0 2px 8px rgba(0,0,0,0.06)', overflow: 'hidden' }}>
-        {loading ? <div style={{ padding: 40, textAlign: 'center', color: '#94a3b8' }}>Caricamento...</div> : (
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead>
-              <tr style={{ background: '#f8fafc' }}>
-                {['Tipo', 'Numero', 'Data', 'Cliente', 'Listino', 'Pagamento', 'Totale', 'Stato', 'Azioni'].map(h => (
-                  <th key={h} style={{ padding: '12px 14px', textAlign: 'left', fontSize: 12, fontWeight: 600, color: '#64748b', borderBottom: '1px solid #e2e8f0' }}>{h}</th>
-                ))}
-              </tr>
-            </thead>
+      <div style={{ background:'#fff', borderRadius:12, boxShadow:'0 2px 8px rgba(0,0,0,0.06)', overflow:'hidden' }}>
+        {loading ? <div style={{ padding:40, textAlign:'center', color:'#94a3b8' }}>Caricamento...</div> : (
+          <table style={{ width:'100%', borderCollapse:'collapse' }}>
+            <thead><tr style={{ background:'#f8fafc' }}>
+              {['Numero','Tipo','Data','Cliente','Listino','Pagamento','Totale','Stato','Azioni'].map(h=>(
+                <th key={h} style={{ padding:'10px 12px', textAlign:'left', fontSize:11, fontWeight:600, color:'#64748b', borderBottom:'1px solid #e2e8f0', whiteSpace:'nowrap' }}>{h}</th>
+              ))}
+            </tr></thead>
             <tbody>
-              {docFiltrati.length === 0 ? <tr><td colSpan={9} style={{ padding: 40, textAlign: 'center', color: '#94a3b8' }}>Nessun documento trovato</td></tr> : docFiltrati.map(d => {
-                const tipoInfo = TIPI_DOC.find(t => t.id === d.tipo)
-                const statoColor: any = { bozza: '#f59e0b', confermato: '#3b82f6', spedito: '#8b5cf6', fatturato: '#10b981', annullato: '#ef4444' }
-                return (
-                  <tr key={d.id} style={{ borderBottom: '1px solid #f1f5f9', cursor: 'pointer' }} onClick={() => apriDocumento(d)}>
-                    <td style={{ padding: '10px 14px' }}><span style={{ background: '#eff6ff', color: '#1d4ed8', padding: '2px 8px', borderRadius: 6, fontSize: 12, fontWeight: 600 }}>{tipoInfo?.label || d.tipo}</span></td>
-                    <td style={{ padding: '10px 14px', fontSize: 13, fontFamily: 'monospace', fontWeight: 600 }}>{d.numero_doc}</td>
-                    <td style={{ padding: '10px 14px', fontSize: 13 }}>{d.data_documento ? new Date(d.data_documento).toLocaleDateString('it-IT') : '--'}</td>
-                    <td style={{ padding: '10px 14px', fontSize: 14, fontWeight: 500 }}>{d.cliente_nome || '--'}</td>
-                    <td style={{ padding: '10px 14px', fontSize: 13 }}>{d.listino || '--'}</td>
-                    <td style={{ padding: '10px 14px', fontSize: 13 }}>{d.pagamento || '--'}</td>
-                    <td style={{ padding: '10px 14px', fontSize: 14, fontWeight: 700, color: '#1d4ed8' }}>euro{Number(d.totale_documento || 0).toFixed(2)}</td>
-                    <td style={{ padding: '10px 14px' }}><span style={{ background: (statoColor[d.stato] || '#94a3b8') + '20', color: statoColor[d.stato] || '#64748b', padding: '2px 8px', borderRadius: 6, fontSize: 12, fontWeight: 600 }}>{d.stato}</span></td>
-                    <td style={{ padding: '10px 14px' }} onClick={e => e.stopPropagation()}>
-                      <button onClick={() => eliminaDocumento(d.id)} style={{ background: '#fee2e2', color: '#ef4444', border: 'none', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 12 }}>Elimina</button>
-                    </td>
-                  </tr>
-                )
-              })}
+              {docsFiltrati.length === 0 ? <tr><td colSpan={9} style={{ padding:40, textAlign:'center', color:'#94a3b8' }}>Nessun documento trovato</td></tr> : docsFiltrati.map(d=>(
+                <tr key={d.id} style={{ borderBottom:'1px solid #f1f5f9' }}>
+                  <td style={{ padding:'9px 12px', fontSize:13, fontFamily:'monospace', fontWeight:600 }}>{d.numero || d.id.substring(0,8)}</td>
+                  <td style={{ padding:'9px 12px', fontSize:12 }}><span style={{ background:'#eff6ff', color:'#1d4ed8', padding:'2px 8px', borderRadius:4, fontSize:11, fontWeight:600 }}>{(d.tipo||'').toUpperCase()}</span></td>
+                  <td style={{ padding:'9px 12px', fontSize:13, color:'#64748b', whiteSpace:'nowrap' }}>{d.data_documento || '--'}</td>
+                  <td style={{ padding:'9px 12px', fontSize:13, fontWeight:500 }}>{d.cliente_nome || '--'}</td>
+                  <td style={{ padding:'9px 12px', fontSize:12, color:'#64748b' }}>{d.listino || '--'}</td>
+                  <td style={{ padding:'9px 12px', fontSize:12, color:'#64748b' }}>{d.pagamento || '--'}</td>
+                  <td style={{ padding:'9px 12px', fontSize:14, fontWeight:700 }}>€{Number(d.totale||0).toFixed(2)}</td>
+                  <td style={{ padding:'9px 12px' }}><span style={{ background:statoColor[d.stato]||'#e2e8f0', color:statoTextColor[d.stato]||'#64748b', padding:'3px 8px', borderRadius:6, fontSize:11, fontWeight:600 }}>{(d.stato||'').toUpperCase()}</span></td>
+                  <td style={{ padding:'9px 10px' }}>
+                    <div style={{ display:'flex', gap:5 }}>
+                      <button onClick={()=>apriModificaDoc(d)} style={{ background:'#dbeafe', color:'#1d4ed8', border:'none', borderRadius:6, padding:'4px 10px', cursor:'pointer', fontSize:12 }}>Modifica</button>
+                      <button onClick={()=>eliminaDoc(d.id)} style={{ background:'#fee2e2', color:'#ef4444', border:'none', borderRadius:6, padding:'4px 10px', cursor:'pointer', fontSize:12 }}>Elimina</button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
             </tbody>
           </table>
         )}
