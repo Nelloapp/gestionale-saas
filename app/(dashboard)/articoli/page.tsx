@@ -5,7 +5,14 @@ import { supabase, supabaseAdmin } from '../../../lib/supabase'
 const USER_ID = 'f1e0512f-0ecd-41b5-a29a-33fc9f832528'
 const inp = (extra?: any): any => ({ width: '100%', border: '1px solid #e2e8f0', borderRadius: 8, padding: '8px 12px', fontSize: 14, outline: 'none', boxSizing: 'border-box', background: '#fff', ...extra })
 const btn = (bg: string, extra?: any): any => ({ background: bg, color: '#fff', border: 'none', borderRadius: 8, padding: '8px 18px', cursor: 'pointer', fontWeight: 600, fontSize: 14, ...extra })
-const emptyForm = { nome: '', codice: '', ean: '', categoria_id: '', prezzo: 0, prezzo_ingrosso: 0, prezzo_promo: 0, prezzo_vip: 0, iva: 22, um: 'Pz', stock: 0, descrizione: '', attivo: true }
+
+// Usa i campi reali della tabella articoli esistente
+const emptyForm = {
+  nome: '', codice: '', ean: '', categoria_id: '',
+  prezzo_base: 0, prezzo_ingrosso: 0, prezzo_promo: 0, prezzo_vip: 0,
+  iva: 22, um: 'Pz', stock: 0, descrizione: '', stato: 'attivo',
+  costo: 0, categoria: ''
+}
 
 export default function ArticoliPage() {
   const [articoli, setArticoli] = useState<any[]>([])
@@ -35,7 +42,7 @@ export default function ArticoliPage() {
   async function loadAll() {
     setLoading(true)
     const [{ data: arts }, { data: cats }, { data: cols }, { data: mis }] = await Promise.all([
-      supabaseAdmin.from('articoli').select('*, categorie_prodotto(nome)').order('nome'),
+      supabaseAdmin.from('articoli').select('*').order('nome'),
       supabaseAdmin.from('categorie_prodotto').select('*').order('nome'),
       supabaseAdmin.from('colori').select('*').order('nome'),
       supabaseAdmin.from('misure').select('*').order('ordine, nome'),
@@ -51,8 +58,24 @@ export default function ArticoliPage() {
     if (!form.nome.trim()) { setError('Il nome e obbligatorio'); return }
     setSaving(true); setError(''); setSuccess('')
     const { data: { user } } = await supabase.auth.getUser()
-    const payload = { ...form, user_id: user?.id || USER_ID, prezzo: Number(form.prezzo)||0, prezzo_ingrosso: Number(form.prezzo_ingrosso)||0, prezzo_promo: Number(form.prezzo_promo)||0, prezzo_vip: Number(form.prezzo_vip)||0, iva: Number(form.iva)||22, stock: Number(form.stock)||0, categoria_id: form.categoria_id||null, ean: form.ean||null, codice: form.codice||null }
-    const result = editId ? await supabaseAdmin.from('articoli').update(payload).eq('id', editId) : await supabaseAdmin.from('articoli').insert([payload])
+    const payload: any = {
+      nome: form.nome, codice: form.codice || null, ean: form.ean || null,
+      categoria_id: form.categoria_id || null, categoria: form.categoria || null,
+      prezzo_base: Number(form.prezzo_base) || 0,
+      prezzo_ingrosso: Number(form.prezzo_ingrosso) || 0,
+      prezzo_promo: Number(form.prezzo_promo) || 0,
+      prezzo_vip: Number(form.prezzo_vip) || 0,
+      iva: Number(form.iva) || 22,
+      um: form.um || 'Pz',
+      stock: Number(form.stock) || 0,
+      costo: Number(form.costo) || 0,
+      descrizione: form.descrizione || null,
+      stato: form.stato || 'attivo',
+      user_id: user?.id || USER_ID,
+    }
+    const result = editId
+      ? await supabaseAdmin.from('articoli').update(payload).eq('id', editId)
+      : await supabaseAdmin.from('articoli').insert([payload])
     if (result.error) { setError('Errore: ' + result.error.message) }
     else { setSuccess(editId ? 'Articolo aggiornato!' : 'Articolo salvato!'); setView('lista'); setForm({...emptyForm}); setEditId(null); loadAll() }
     setSaving(false)
@@ -78,7 +101,17 @@ export default function ArticoliPage() {
     setSaving(true); setError('')
     const colore = colori.find(c => c.id === varianteForm.colore_id)
     const misura = misure.find(m => m.id === varianteForm.misura_id)
-    const payload = { articolo_id: articoloVarianti.id, colore_id: varianteForm.colore_id||null, misura_id: varianteForm.misura_id||null, colore_nome: colore?.nome||null, misura_nome: misura?.nome||null, ean: varianteForm.ean||null, codice_variante: varianteForm.codice_variante||null, prezzo_override: varianteForm.prezzo_override ? Number(varianteForm.prezzo_override) : null, stock: Number(varianteForm.stock)||0 }
+    const payload = {
+      articolo_id: articoloVarianti.id,
+      colore_id: varianteForm.colore_id || null,
+      misura_id: varianteForm.misura_id || null,
+      colore_nome: colore?.nome || null,
+      misura_nome: misura?.nome || null,
+      ean: varianteForm.ean || null,
+      codice_variante: varianteForm.codice_variante || null,
+      prezzo_override: varianteForm.prezzo_override ? Number(varianteForm.prezzo_override) : null,
+      stock: Number(varianteForm.stock) || 0
+    }
     const { error } = await supabaseAdmin.from('varianti_articolo').insert([payload])
     if (error) { setError('Errore: ' + error.message) }
     else { setSuccess('Variante aggiunta!'); setVarianteForm({ colore_id: '', misura_id: '', ean: '', codice_variante: '', prezzo_override: '', stock: 0 }); apriVarianti(articoloVarianti) }
@@ -108,7 +141,7 @@ export default function ArticoliPage() {
   }
 
   const artFiltrati = articoli.filter(a => {
-    const matchCat = filtroCat === 'tutti' || a.categoria_id === filtroCat
+    const matchCat = filtroCat === 'tutti' || a.categoria_id === filtroCat || a.categoria === filtroCat
     const matchCerca = !cerca || a.nome?.toLowerCase().includes(cerca.toLowerCase()) || a.codice?.toLowerCase().includes(cerca.toLowerCase()) || a.ean?.includes(cerca)
     return matchCat && matchCerca
   })
@@ -200,7 +233,7 @@ export default function ArticoliPage() {
         <button onClick={()=>setView('lista')} style={btn('#64748b')}>Indietro</button>
         <div>
           <h1 style={{margin:0,fontSize:20,fontWeight:700}}>Varianti: {articoloVarianti?.nome}</h1>
-          <p style={{margin:0,fontSize:13,color:'#64748b'}}>Prezzo base: euro{Number(articoloVarianti?.prezzo||0).toFixed(2)} - Codice: {articoloVarianti?.codice||'--'}</p>
+          <p style={{margin:0,fontSize:13,color:'#64748b'}}>Prezzo base: euro{Number(articoloVarianti?.prezzo_base||0).toFixed(2)} - Codice: {articoloVarianti?.codice||'--'}</p>
         </div>
       </div>
       <Err/><Suc/>
@@ -211,7 +244,7 @@ export default function ArticoliPage() {
           <div><label style={{fontSize:12,color:'#64748b',display:'block',marginBottom:4}}>Misura/Taglia</label><select style={inp()} value={varianteForm.misura_id} onChange={e=>setVarianteForm(p=>({...p,misura_id:e.target.value}))}><option value="">-- Nessuna --</option>{misure.map(m=><option key={m.id} value={m.id}>{m.nome} ({m.categoria})</option>)}</select></div>
           <div><label style={{fontSize:12,color:'#64748b',display:'block',marginBottom:4}}>EAN / Barcode</label><input style={inp()} value={varianteForm.ean} onChange={e=>setVarianteForm(p=>({...p,ean:e.target.value}))} placeholder="Scansiona o digita EAN"/></div>
           <div><label style={{fontSize:12,color:'#64748b',display:'block',marginBottom:4}}>Codice Variante</label><input style={inp()} value={varianteForm.codice_variante} onChange={e=>setVarianteForm(p=>({...p,codice_variante:e.target.value}))} placeholder="es. ART001-BLU-M"/></div>
-          <div><label style={{fontSize:12,color:'#64748b',display:'block',marginBottom:4}}>Prezzo (opz.)</label><input type="number" step="0.01" style={inp()} value={varianteForm.prezzo_override} onChange={e=>setVarianteForm(p=>({...p,prezzo_override:e.target.value}))} placeholder={"Base: euro"+articoloVarianti?.prezzo}/></div>
+          <div><label style={{fontSize:12,color:'#64748b',display:'block',marginBottom:4}}>Prezzo (opz.)</label><input type="number" step="0.01" style={inp()} value={varianteForm.prezzo_override} onChange={e=>setVarianteForm(p=>({...p,prezzo_override:e.target.value}))} placeholder={"Base: euro"+articoloVarianti?.prezzo_base}/></div>
           <div><label style={{fontSize:12,color:'#64748b',display:'block',marginBottom:4}}>Stock</label><input type="number" style={inp()} value={varianteForm.stock} onChange={e=>setVarianteForm(p=>({...p,stock:Number(e.target.value)}))}/></div>
         </div>
         <div style={{marginTop:16}}><button onClick={salvaVariante} disabled={saving} style={btn('#10b981',{padding:'10px 28px'})}>{saving?'Salvataggio...':'+ Aggiungi Variante'}</button></div>
@@ -255,15 +288,17 @@ export default function ArticoliPage() {
             <div style={{gridColumn:'1/-1'}}><label style={{fontSize:12,color:'#64748b',display:'block',marginBottom:4}}>Nome Articolo *</label><input style={inp()} value={form.nome} onChange={e=>setForm(p=>({...p,nome:e.target.value}))} placeholder="Nome articolo"/></div>
             <div><label style={{fontSize:12,color:'#64748b',display:'block',marginBottom:4}}>Codice Articolo</label><input style={inp()} value={form.codice} onChange={e=>setForm(p=>({...p,codice:e.target.value}))} placeholder="es. ART001"/></div>
             <div><label style={{fontSize:12,color:'#64748b',display:'block',marginBottom:4}}>EAN / Barcode</label><input style={inp()} value={form.ean} onChange={e=>setForm(p=>({...p,ean:e.target.value}))} placeholder="Scansiona o digita EAN"/></div>
-            <div><label style={{fontSize:12,color:'#64748b',display:'block',marginBottom:4}}>Categoria</label><select style={inp()} value={form.categoria_id} onChange={e=>setForm(p=>({...p,categoria_id:e.target.value}))}><option value="">-- Nessuna --</option>{categorie.map(c=><option key={c.id} value={c.id}>{c.nome}</option>)}</select></div>
+            <div><label style={{fontSize:12,color:'#64748b',display:'block',marginBottom:4}}>Categoria</label><select style={inp()} value={form.categoria_id} onChange={e=>{const cat=categorie.find(c=>c.id===e.target.value);setForm(p=>({...p,categoria_id:e.target.value,categoria:cat?.nome||''}))}}><option value="">-- Nessuna --</option>{categorie.map(c=><option key={c.id} value={c.id}>{c.nome}</option>)}</select></div>
             <div><label style={{fontSize:12,color:'#64748b',display:'block',marginBottom:4}}>Unita di Misura</label><select style={inp()} value={form.um} onChange={e=>setForm(p=>({...p,um:e.target.value}))}>{['Pz','Kg','Lt','Mt','Conf','Set','Paia'].map(u=><option key={u}>{u}</option>)}</select></div>
             <div><label style={{fontSize:12,color:'#64748b',display:'block',marginBottom:4}}>Stock attuale</label><input type="number" style={inp()} value={form.stock} onChange={e=>setForm(p=>({...p,stock:Number(e.target.value)}))}/></div>
+            <div><label style={{fontSize:12,color:'#64748b',display:'block',marginBottom:4}}>Costo acquisto</label><input type="number" step="0.01" style={inp()} value={form.costo} onChange={e=>setForm(p=>({...p,costo:Number(e.target.value)}))}/></div>
+            <div><label style={{fontSize:12,color:'#64748b',display:'block',marginBottom:4}}>Stato</label><select style={inp()} value={form.stato} onChange={e=>setForm(p=>({...p,stato:e.target.value}))}><option value="attivo">Attivo</option><option value="bozza">Bozza</option><option value="fuori_produzione">Fuori produzione</option></select></div>
             <div style={{gridColumn:'1/-1'}}><label style={{fontSize:12,color:'#64748b',display:'block',marginBottom:4}}>Descrizione</label><textarea style={{...inp(),height:80,resize:'vertical'}} value={form.descrizione} onChange={e=>setForm(p=>({...p,descrizione:e.target.value}))} placeholder="Descrizione articolo..."/></div>
           </div>
         )}
         {tab==='listini' && (
           <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16}}>
-            <div><label style={{fontSize:12,color:'#64748b',display:'block',marginBottom:4}}>Prezzo Vendita (Listino Base)</label><input type="number" step="0.01" style={inp()} value={form.prezzo} onChange={e=>setForm(p=>({...p,prezzo:Number(e.target.value)}))}/></div>
+            <div><label style={{fontSize:12,color:'#64748b',display:'block',marginBottom:4}}>Prezzo Vendita (Listino Base)</label><input type="number" step="0.01" style={inp()} value={form.prezzo_base} onChange={e=>setForm(p=>({...p,prezzo_base:Number(e.target.value)}))}/></div>
             <div><label style={{fontSize:12,color:'#64748b',display:'block',marginBottom:4}}>Prezzo Ingrosso</label><input type="number" step="0.01" style={inp()} value={form.prezzo_ingrosso} onChange={e=>setForm(p=>({...p,prezzo_ingrosso:Number(e.target.value)}))}/></div>
             <div><label style={{fontSize:12,color:'#64748b',display:'block',marginBottom:4}}>Prezzo Promo</label><input type="number" step="0.01" style={inp()} value={form.prezzo_promo} onChange={e=>setForm(p=>({...p,prezzo_promo:Number(e.target.value)}))}/></div>
             <div><label style={{fontSize:12,color:'#64748b',display:'block',marginBottom:4}}>Prezzo VIP</label><input type="number" step="0.01" style={inp()} value={form.prezzo_vip} onChange={e=>setForm(p=>({...p,prezzo_vip:Number(e.target.value)}))}/></div>
@@ -286,7 +321,7 @@ export default function ArticoliPage() {
           <p style={{margin:0,fontSize:14,color:'#64748b'}}>Gestione articoli, varianti, colori e misure</p>
         </div>
         <div style={{display:'flex',gap:10}}>
-          <button onClick={()=>setView('tabelle')} style={btn('#8b5cf6')}>Tabelle</button>
+          <button onClick={()=>setView('tabelle')} style={btn('#8b5cf6')}>Tabelle (Colori/Misure)</button>
           <button onClick={()=>{setForm({...emptyForm});setEditId(null);setTab('info');setView('form')}} style={btn('#3b82f6')}>+ Nuovo Articolo</button>
         </div>
       </div>
@@ -299,21 +334,21 @@ export default function ArticoliPage() {
       <div style={{background:'#fff',borderRadius:12,boxShadow:'0 2px 8px rgba(0,0,0,0.06)',overflow:'hidden'}}>
         {loading?<div style={{padding:40,textAlign:'center',color:'#94a3b8'}}>Caricamento...</div>:(
           <table style={{width:'100%',borderCollapse:'collapse'}}>
-            <thead><tr style={{background:'#f8fafc'}}>{['Codice','Nome','Categoria','EAN','Prezzo','Stock','IVA','Azioni'].map(h=><th key={h} style={{padding:'12px 14px',textAlign:'left',fontSize:12,fontWeight:600,color:'#64748b',borderBottom:'1px solid #e2e8f0'}}>{h}</th>)}</tr></thead>
+            <thead><tr style={{background:'#f8fafc'}}>{['Codice','Nome','Categoria','EAN','Prezzo Base','Stock','IVA','Azioni'].map(h=><th key={h} style={{padding:'12px 14px',textAlign:'left',fontSize:12,fontWeight:600,color:'#64748b',borderBottom:'1px solid #e2e8f0'}}>{h}</th>)}</tr></thead>
             <tbody>
               {artFiltrati.length===0?<tr><td colSpan={8} style={{padding:40,textAlign:'center',color:'#94a3b8'}}>Nessun articolo trovato</td></tr>:artFiltrati.map(a=>(
                 <tr key={a.id} style={{borderBottom:'1px solid #f1f5f9'}}>
                   <td style={{padding:'10px 14px',fontSize:13,fontFamily:'monospace',color:'#64748b'}}>{a.codice||'--'}</td>
                   <td style={{padding:'10px 14px'}}><div style={{fontWeight:600,fontSize:14}}>{a.nome}</div>{a.descrizione&&<div style={{fontSize:12,color:'#94a3b8',marginTop:2}}>{a.descrizione.substring(0,50)}</div>}</td>
-                  <td style={{padding:'10px 14px',fontSize:13}}>{a.categorie_prodotto?.nome||a.categoria||'--'}</td>
+                  <td style={{padding:'10px 14px',fontSize:13}}>{a.categoria||'--'}</td>
                   <td style={{padding:'10px 14px',fontSize:12,fontFamily:'monospace'}}>{a.ean||'--'}</td>
-                  <td style={{padding:'10px 14px',fontSize:14,fontWeight:600}}>euro{Number(a.prezzo||0).toFixed(2)}</td>
+                  <td style={{padding:'10px 14px',fontSize:14,fontWeight:600}}>euro{Number(a.prezzo_base||0).toFixed(2)}</td>
                   <td style={{padding:'10px 14px'}}><span style={{background:(a.stock||0)>0?'#d1fae5':'#fee2e2',color:(a.stock||0)>0?'#065f46':'#991b1b',padding:'2px 8px',borderRadius:6,fontSize:13}}>{a.stock||0}</span></td>
                   <td style={{padding:'10px 14px',fontSize:13}}>{a.iva||22}%</td>
                   <td style={{padding:'10px 14px'}}>
                     <div style={{display:'flex',gap:6}}>
                       <button onClick={()=>apriVarianti(a)} style={{background:'#ede9fe',color:'#7c3aed',border:'none',borderRadius:6,padding:'4px 10px',cursor:'pointer',fontSize:12,fontWeight:600}}>Varianti</button>
-                      <button onClick={()=>{setForm({nome:a.nome,codice:a.codice||'',ean:a.ean||'',categoria_id:a.categoria_id||'',prezzo:a.prezzo||0,prezzo_ingrosso:a.prezzo_ingrosso||0,prezzo_promo:a.prezzo_promo||0,prezzo_vip:a.prezzo_vip||0,iva:a.iva||22,um:a.um||'Pz',stock:a.stock||0,descrizione:a.descrizione||'',attivo:a.attivo!==false});setEditId(a.id);setTab('info');setView('form')}} style={{background:'#dbeafe',color:'#1d4ed8',border:'none',borderRadius:6,padding:'4px 10px',cursor:'pointer',fontSize:12}}>Modifica</button>
+                      <button onClick={()=>{setForm({nome:a.nome,codice:a.codice||'',ean:a.ean||'',categoria_id:a.categoria_id||'',prezzo_base:a.prezzo_base||0,prezzo_ingrosso:a.prezzo_ingrosso||0,prezzo_promo:a.prezzo_promo||0,prezzo_vip:a.prezzo_vip||0,iva:a.iva||22,um:a.um||'Pz',stock:a.stock||0,descrizione:a.descrizione||'',stato:a.stato||'attivo',costo:a.costo||0,categoria:a.categoria||''});setEditId(a.id);setTab('info');setView('form')}} style={{background:'#dbeafe',color:'#1d4ed8',border:'none',borderRadius:6,padding:'4px 10px',cursor:'pointer',fontSize:12}}>Modifica</button>
                       <button onClick={()=>eliminaArticolo(a.id)} style={{background:'#fee2e2',color:'#ef4444',border:'none',borderRadius:6,padding:'4px 10px',cursor:'pointer',fontSize:12}}>Elimina</button>
                     </div>
                   </td>
