@@ -2,33 +2,52 @@
 import { useState, useEffect, useRef } from 'react'
 import { supabase, supabaseAdmin } from '../../../lib/supabase'
 
+const USER_ID = 'f1e0512f-0ecd-41b5-a29a-33fc9f832528'
 
-type RigaCarrello = { id: string; articolo_id?: string; codice: string; nome: string; qta: number; prezzo: number; sconto: number; iva: number; totale: number }
-type Conto = { id: string; nome: string; tipo: string; stato: string; righe: RigaCarrello[] }
+type RigaCarrello = {
+  id: string; articolo_id?: string; codice: string; nome: string
+  variante?: string; colore?: string
+  qta: number; prezzo: number; sconto: number; iva: number; totale: number
+}
+
+const LISTINI = ['Base', 'Premium', 'Rivenditori', 'Ingrosso']
+const PAGAMENTI = [
+  { id: 'contanti', label: 'Contanti', icon: '💵' },
+  { id: 'carta', label: 'Carta/POS', icon: '💳' },
+  { id: 'bonifico', label: 'Bonifico', icon: '🏦' },
+  { id: 'assegno', label: 'Assegno', icon: '📄' },
+  { id: 'credito', label: 'A Credito', icon: '📋' },
+  { id: '30gg', label: '30 giorni', icon: '📅' },
+  { id: '60gg', label: '60 giorni', icon: '📅' },
+  { id: '90gg', label: '90 giorni', icon: '📅' },
+]
 
 export default function CassaPage() {
-  const [modalita, setModalita] = useState<'home' | 'veloce' | 'scan' | 'conti' | 'ingrosso' | 'archivio' | 'chiusura'>('home')
+  const [modalita, setModalita] = useState<'home' | 'veloce' | 'scan' | 'archivio'>('home')
   const [articoli, setArticoli] = useState<any[]>([])
   const [clienti, setClienti] = useState<any[]>([])
   const [carrello, setCarrello] = useState<RigaCarrello[]>([])
-  const [conti, setConti] = useState<Conto[]>([])
-  const [contoAttivo, setContoAttivo] = useState<string | null>(null)
   const [clienteSelezionato, setClienteSelezionato] = useState<any>(null)
   const [cerca, setCerca] = useState('')
+  const [cercaCliente, setCercaCliente] = useState('')
+  const [showCercaCliente, setShowCercaCliente] = useState(false)
   const [barcode, setBarcode] = useState('')
   const [scanFeedback, setScanFeedback] = useState<'ok' | 'error' | null>(null)
-  const [ultimoScan, setUltimoScan] = useState('')
   const [pagamento, setPagamento] = useState('contanti')
-  const [contantiDati, setContantiDati] = useState(0)
+  const [listino, setListino] = useState('Base')
   const [scontoTotale, setScontoTotale] = useState(0)
   const [showPaga, setShowPaga] = useState(false)
+  const [contantiDati, setContantiDati] = useState(0)
   const [vendite, setVendite] = useState<any[]>([])
   const [loading, setLoading] = useState(false)
   const [success, setSuccess] = useState('')
   const [error, setError] = useState('')
+  const [note, setNote] = useState('')
+  const [showNota, setShowNota] = useState(false)
+  const [prezzoCustom, setPrezzoCustom] = useState<{[id: string]: number}>({})
   const barcodeRef = useRef<HTMLInputElement>(null)
 
-  useEffect(() => { loadArticoli(); loadClienti(); loadConti(); loadVendite() }, [])
+  useEffect(() => { loadArticoli(); loadClienti(); loadVendite() }, [])
   useEffect(() => { if (modalita === 'scan' && barcodeRef.current) barcodeRef.current.focus() }, [modalita])
 
   async function loadArticoli() {
@@ -36,609 +55,495 @@ export default function CassaPage() {
     setArticoli(data || [])
   }
   async function loadClienti() {
-    const { data } = await supabaseAdmin.from('clienti').select('*').eq('stato', 'attivo')
+    const { data } = await supabaseAdmin.from('clienti').select('*').eq('stato', 'attivo').order('nome')
     setClienti(data || [])
   }
-  async function loadConti() {
-    const { data: contiData } = await supabaseAdmin.from('conti_cassa').select('*').eq('stato', 'aperto').order('created_at', { ascending: false })
-    if (contiData) {
-      const contiConRighe = await Promise.all(contiData.map(async (c) => {
-        const { data: righe } = await supabaseAdmin.from('conti_righe').select('*').eq('conto_id', c.id)
-        return { ...c, righe: (righe || []).map(r => ({ id: r.id, articolo_id: r.articolo_id, codice: r.codice, nome: r.nome, qta: r.qta, prezzo: r.prezzo_unitario, sconto: r.sconto, iva: 22, totale: r.totale })) }
-      }))
-      setConti(contiConRighe)
-    }
-  }
   async function loadVendite() {
-    const { data } = await supabaseAdmin.from('vendite').select('*').order('created_at', { ascending: false }).limit(50)
+    const { data } = await supabaseAdmin.from('vendite').select('*').order('created_at', { ascending: false }).limit(30)
     setVendite(data || [])
   }
 
-  function aggiungiAlCarrello(art: any, qta = 1) {
-    const prezzo = clienteSelezionato ? (clienteSelezionato.listino === 'premium' ? art.prezzo_premium : clienteSelezionato.listino === 'rivenditori' ? art.prezzo_rivenditori : art.prezzo_base) : art.prezzo_base
-    const sconto = clienteSelezionato?.sconto || 0
+  function getPrezzoListino(art: any) {
+    const l = listino.toLowerCase()
+    if (l === 'premium') return art.prezzo_premium || art.prezzo_base || 0
+    if (l === 'rivenditori') return art.prezzo_rivenditori || art.prezzo_base || 0
+    if (l === 'ingrosso') return (art.prezzo_base || 0) * 0.75
+    return art.prezzo_base || 0
+  }
+
+  function aggiungiAlCarrello(art: any, qtaExtra = 1) {
+    const prezzo = getPrezzoListino(art)
+    const scontoCliente = clienteSelezionato?.sconto || 0
     setCarrello(prev => {
       const idx = prev.findIndex(r => r.articolo_id === art.id)
       if (idx >= 0) {
         const updated = [...prev]
-        updated[idx] = { ...updated[idx], qta: updated[idx].qta + qta, totale: (updated[idx].qta + qta) * updated[idx].prezzo * (1 - updated[idx].sconto / 100) }
+        const r = updated[idx]
+        const newQta = r.qta + qtaExtra
+        updated[idx] = { ...r, qta: newQta, totale: Math.round(newQta * r.prezzo * (1 - r.sconto / 100) * 100) / 100 }
         return updated
       }
-      return [...prev, { id: Date.now().toString(), articolo_id: art.id, codice: art.codice, nome: art.nome, qta, prezzo, sconto, iva: art.iva, totale: qta * prezzo * (1 - sconto / 100) }]
+      const id = crypto.randomUUID()
+      return [...prev, {
+        id, articolo_id: art.id, codice: art.codice, nome: art.nome,
+        variante: art.variante || '', colore: art.colore || '',
+        qta: qtaExtra, prezzo, sconto: scontoCliente, iva: 22,
+        totale: Math.round(qtaExtra * prezzo * (1 - scontoCliente / 100) * 100) / 100
+      }]
     })
   }
 
-  function scanBarcode(e: React.KeyboardEvent) {
-    if (e.key === 'Enter') {
-      const art = articoli.find(a => a.ean === barcode || a.codice === barcode)
-      if (art) {
-        aggiungiAlCarrello(art)
-        setUltimoScan(art.nome)
-        setScanFeedback('ok')
-        setTimeout(() => setScanFeedback(null), 1500)
-      } else {
-        setScanFeedback('error')
-        setUltimoScan('Articolo non trovato: ' + barcode)
-        setTimeout(() => setScanFeedback(null), 2000)
-      }
-      setBarcode('')
-      if (barcodeRef.current) barcodeRef.current.focus()
-    }
+  function rimuoviRiga(id: string) { setCarrello(prev => prev.filter(r => r.id !== id)) }
+
+  function aggiornaQta(id: string, delta: number) {
+    setCarrello(prev => prev.map(r => {
+      if (r.id !== id) return r
+      const newQta = Math.max(0.5, r.qta + delta)
+      return { ...r, qta: newQta, totale: Math.round(newQta * r.prezzo * (1 - r.sconto / 100) * 100) / 100 }
+    }).filter(r => r.qta > 0))
   }
 
-  function rimuoviDalCarrello(id: string) { setCarrello(prev => prev.filter(r => r.id !== id)) }
-  function aggiornaQta(id: string, qta: number) {
-    if (qta <= 0) { rimuoviDalCarrello(id); return }
-    setCarrello(prev => prev.map(r => r.id === id ? { ...r, qta, totale: qta * r.prezzo * (1 - r.sconto / 100) } : r))
+  function aggiornaPrezzoRiga(id: string, nuovoPrezzo: number) {
+    setCarrello(prev => prev.map(r => {
+      if (r.id !== id) return r
+      return { ...r, prezzo: nuovoPrezzo, totale: Math.round(r.qta * nuovoPrezzo * (1 - r.sconto / 100) * 100) / 100 }
+    }))
   }
 
-  const subtotale = carrello.reduce((s, r) => s + r.totale, 0)
-  const scontoImporto = subtotale * scontoTotale / 100
-  const totale = subtotale - scontoImporto
-  const resto = contantiDati - totale
+  function aggiornaScontoRiga(id: string, nuovoSconto: number) {
+    setCarrello(prev => prev.map(r => {
+      if (r.id !== id) return r
+      return { ...r, sconto: nuovoSconto, totale: Math.round(r.qta * r.prezzo * (1 - nuovoSconto / 100) * 100) / 100 }
+    }))
+  }
 
-  async function completaVendita(tipo: string) {
+  function handleBarcode(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key !== 'Enter') return
+    const code = barcode.trim()
+    const art = articoli.find(a => a.ean === code || a.codice === code)
+    if (art) { aggiungiAlCarrello(art); setScanFeedback('ok'); setUltimoScan(art.nome) }
+    else { setScanFeedback('error'); setUltimoScan(code) }
+    setBarcode('')
+    setTimeout(() => setScanFeedback(null), 2000)
+  }
+  const [ultimoScan, setUltimoScan] = useState('')
+
+  const totaleImponibile = carrello.reduce((s, r) => s + r.totale, 0)
+  const scontoEuro = totaleImponibile * scontoTotale / 100
+  const imponibileNetto = totaleImponibile - scontoEuro
+  const totaleIva = Math.round(imponibileNetto * 0.22 * 100) / 100
+  const totaleDovuto = Math.round((imponibileNetto + totaleIva) * 100) / 100
+  const resto = Math.max(0, contantiDati - totaleDovuto)
+
+  async function completaVendita() {
     if (carrello.length === 0) { setError('Carrello vuoto'); return }
-    setLoading(true); setError('')
+    setLoading(true); setError(''); setSuccess('')
     const { data: { user } } = await supabase.auth.getUser()
-    const numero = tipo.toUpperCase() + '-' + Date.now().toString().slice(-6)
+    const uid = user?.id || USER_ID
+
+    // Genera numero documento
+    const anno = new Date().getFullYear()
+    const { data: lastDoc } = await supabaseAdmin.from('vendite').select('id').order('created_at', { ascending: false }).limit(1)
+    const progr = (lastDoc?.length || 0) + 1
+    const numDoc = `${anno}_VE${String(progr).padStart(5, '0')}`
+
+    // Salva vendita
     const { data: vendita, error: ve } = await supabaseAdmin.from('vendite').insert([{
-      user_id: user?.id, numero, tipo, data: new Date().toISOString().split('T')[0],
-      cliente_id: clienteSelezionato?.id || null, cliente_nome: clienteSelezionato?.nome || null,
-      modalita_cassa: modalita, subtotale, sconto_perc: scontoTotale, sconto_importo: scontoImporto,
-      totale, iva_totale: totale - totale / (1 + 0.22), pagamento, stato: 'pagata'
+      user_id: uid,
+      cliente_id: clienteSelezionato?.id || null,
+      cliente_nome: clienteSelezionato?.nome || 'Cliente generico',
+      totale: totaleDovuto,
+      pagamento,
+      listino,
+      sconto_totale: scontoTotale,
+      note,
+      created_at: new Date().toISOString()
     }]).select().single()
-    if (ve) { setError('Errore: ' + ve.message); setLoading(false); return }
+
+    if (ve || !vendita) { setError('Errore salvataggio: ' + (ve?.message || 'Sconosciuto')); setLoading(false); return }
+
+    // Salva righe vendita
     await supabaseAdmin.from('vendite_righe').insert(carrello.map(r => ({
-      vendita_id: vendita.id, articolo_id: r.articolo_id || null, codice: r.codice,
-      nome: r.nome, qta: r.qta, prezzo_unitario: r.prezzo, sconto: r.sconto, iva: r.iva, totale: r.totale
+      vendita_id: vendita.id, user_id: uid,
+      articolo_id: r.articolo_id, codice: r.codice, nome: r.nome,
+      qta: r.qta, prezzo_unitario: r.prezzo, sconto: r.sconto, iva: r.iva, totale: r.totale
     })))
+
     // Aggiorna stock articoli
     for (const r of carrello) {
       if (r.articolo_id) {
         const art = articoli.find(a => a.id === r.articolo_id)
-        if (art) await supabaseAdmin.from('articoli').update({ stock: Math.max(0, art.stock - r.qta) }).eq('id', r.articolo_id)
+        if (art) await supabaseAdmin.from('articoli').update({ stock: Math.max(0, (art.stock || 0) - r.qta) }).eq('id', r.articolo_id)
       }
     }
-    setSuccess(`${tipo.toUpperCase()} ${numero} emessa! Totale: €${totale.toFixed(2)}`)
-    setCarrello([]); setScontoTotale(0); setContantiDati(0); setShowPaga(false)
-    setClienteSelezionato(null); loadVendite(); loadArticoli()
-    setLoading(false)
-  }
 
-  async function apriNuovoConto(nome: string, tipo: string) {
-    const { data: { user } } = await supabase.auth.getUser()
-    const { data } = await supabaseAdmin.from('conti_cassa').insert([{ user_id: user?.id, nome, tipo, stato: 'aperto' }]).select().single()
-    if (data) { await loadConti(); setContoAttivo(data.id) }
-  }
+    // Se cliente, aggiorna mastino
+    if (clienteSelezionato) {
+      // Calcola saldo attuale
+      const { data: lastMov } = await supabaseAdmin.from('mastino_clienti')
+        .select('saldo_progressivo').eq('cliente_id', clienteSelezionato.id)
+        .order('created_at', { ascending: false }).limit(1)
+      const saldoPrecedente = lastMov?.[0]?.saldo_progressivo || 0
 
-  async function aggiungiARigaConto(contoId: string, art: any) {
-    const prezzo = art.prezzo_base
-    const { data: { user } } = await supabase.auth.getUser()
-    const conto = conti.find(c => c.id === contoId)
-    const rigaEsistente = conto?.righe.find(r => r.articolo_id === art.id)
-    if (rigaEsistente) {
-      const nuovaQta = rigaEsistente.qta + 1
-      await supabaseAdmin.from('conti_righe').update({ qta: nuovaQta, totale: nuovaQta * prezzo }).eq('id', rigaEsistente.id)
-    } else {
-      await supabaseAdmin.from('conti_righe').insert([{ conto_id: contoId, articolo_id: art.id, codice: art.codice, nome: art.nome, qta: 1, prezzo_unitario: prezzo, sconto: 0, totale: prezzo }])
+      if (pagamento === 'credito' || pagamento === '30gg' || pagamento === '60gg' || pagamento === '90gg') {
+        // Vendita a credito: movimento DARE
+        const gg = pagamento === '30gg' ? 30 : pagamento === '60gg' ? 60 : pagamento === '90gg' ? 90 : 0
+        const dataScad = gg > 0 ? new Date(Date.now() + gg * 86400000).toISOString().split('T')[0] : null
+        await supabaseAdmin.from('mastino_clienti').insert([{
+          user_id: uid, cliente_id: clienteSelezionato.id, cliente_nome: clienteSelezionato.nome,
+          documento_id: vendita.id, numero_doc: numDoc,
+          data_movimento: new Date().toISOString().split('T')[0],
+          causale: `Vendita ${listino} - ${numDoc}`,
+          tipo_movimento: 'dare', importo_dare: totaleDovuto, importo_avere: 0,
+          saldo_progressivo: saldoPrecedente + totaleDovuto,
+          data_scadenza: dataScad, pagato: false
+        }])
+        // Aggiungi a scadenzario
+        if (dataScad) {
+          await supabaseAdmin.from('scadenzario').insert([{
+            user_id: uid, cliente_id: clienteSelezionato.id, cliente_nome: clienteSelezionato.nome,
+            documento_id: vendita.id, numero_doc: numDoc,
+            data_scadenza: dataScad, importo: totaleDovuto, importo_residuo: totaleDovuto, pagato: false
+          }])
+        }
+      } else {
+        // Pagamento immediato: movimento AVERE (pareggia)
+        await supabaseAdmin.from('mastino_clienti').insert([{
+          user_id: uid, cliente_id: clienteSelezionato.id, cliente_nome: clienteSelezionato.nome,
+          documento_id: vendita.id, numero_doc: numDoc,
+          data_movimento: new Date().toISOString().split('T')[0],
+          causale: `Vendita ${listino} - ${numDoc} (${pagamento})`,
+          tipo_movimento: 'avere', importo_dare: 0, importo_avere: totaleDovuto,
+          saldo_progressivo: saldoPrecedente,
+          pagato: true, data_pagamento: new Date().toISOString().split('T')[0],
+          metodo_pagamento: pagamento
+        }])
+      }
     }
-    loadConti()
+
+    setSuccess(`✅ Vendita completata! ${numDoc} — Totale: €${totaleDovuto.toFixed(2)}${pagamento === 'contanti' && contantiDati > 0 ? ` — Resto: €${resto.toFixed(2)}` : ''}`)
+    setCarrello([]); setShowPaga(false); setClienteSelezionato(null); setNote(''); setScontoTotale(0)
+    loadVendite(); loadArticoli()
+    setLoading(false)
+    setTimeout(() => setSuccess(''), 5000)
   }
 
-  async function chiudiConto(contoId: string) {
-    const conto = conti.find(c => c.id === contoId)
-    if (!conto || conto.righe.length === 0) { setError('Conto vuoto'); return }
-    setCarrello(conto.righe)
-    setContoAttivo(null)
-    setShowPaga(true)
-    await supabaseAdmin.from('conti_cassa').update({ stato: 'chiuso', closed_at: new Date().toISOString() }).eq('id', contoId)
-    loadConti()
-  }
-
-  async function eliminaRigaConto(rigaId: string) {
-    await supabaseAdmin.from('conti_righe').delete().eq('id', rigaId)
-    loadConti()
-  }
-
-  const artFiltrati = articoli.filter(a => !cerca || a.nome?.toLowerCase().includes(cerca.toLowerCase()) || a.codice?.toLowerCase().includes(cerca.toLowerCase()))
-  const contoAttivoData = conti.find(c => c.id === contoAttivo)
-
-  const kpiVendite = {
-    oggi: vendite.filter(v => v.data === new Date().toISOString().split('T')[0]).length,
-    totaleOggi: vendite.filter(v => v.data === new Date().toISOString().split('T')[0]).reduce((s, v) => s + v.totale, 0),
-    contanti: vendite.filter(v => v.pagamento === 'contanti').reduce((s, v) => s + v.totale, 0),
-    carta: vendite.filter(v => v.pagamento === 'carta').reduce((s, v) => s + v.totale, 0),
-  }
-
-  const btnModalita = (id: any, icon: string, label: string, desc: string, color: string) => (
-    <button key={id} onClick={() => { setModalita(id); setCarrello([]); setScontoTotale(0); setClienteSelezionato(null) }}
-      style={{ background: 'white', border: `2px solid ${color}20`, borderRadius: '16px', padding: '24px', cursor: 'pointer', textAlign: 'left', transition: 'all 0.2s' }}
-      onMouseEnter={e => (e.currentTarget.style.borderColor = color)} onMouseLeave={e => (e.currentTarget.style.borderColor = color + '20')}>
-      <div style={{ fontSize: '36px', marginBottom: '10px' }}>{icon}</div>
-      <div style={{ fontWeight: '800', fontSize: '18px', color: '#0f172a', marginBottom: '4px' }}>{label}</div>
-      <div style={{ fontSize: '13px', color: '#64748b' }}>{desc}</div>
-    </button>
+  const artFiltrati = articoli.filter(a =>
+    !cerca || a.nome?.toLowerCase().includes(cerca.toLowerCase()) ||
+    a.codice?.toLowerCase().includes(cerca.toLowerCase()) ||
+    a.ean?.includes(cerca)
+  )
+  const clientiFiltrati = clienti.filter(c =>
+    !cercaCliente || c.nome?.toLowerCase().includes(cercaCliente.toLowerCase()) ||
+    c.codice?.toLowerCase().includes(cercaCliente.toLowerCase())
   )
 
+  // ── HOME ──────────────────────────────────────────────────────────────────
+  if (modalita === 'home') return (
+    <div style={{ padding: 24, maxWidth: 900, margin: '0 auto' }}>
+      <h1 style={{ fontSize: 28, fontWeight: 800, marginBottom: 8, color: '#1e293b' }}>🏪 Cassa</h1>
+      <p style={{ color: '#64748b', marginBottom: 32 }}>Seleziona la modalità di vendita</p>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 20 }}>
+        {[
+          { id: 'veloce', icon: '⚡', label: 'Vendita Veloce', desc: 'Cerca e aggiungi articoli', color: '#3b82f6' },
+          { id: 'scan', icon: '📷', label: 'Scansione Barcode', desc: 'Leggi codici a barre', color: '#8b5cf6' },
+          { id: 'archivio', icon: '📋', label: 'Archivio Vendite', desc: 'Storico transazioni', color: '#10b981' },
+        ].map(m => (
+          <button key={m.id} onClick={() => setModalita(m.id as any)} style={{
+            background: '#fff', border: `2px solid ${m.color}20`, borderRadius: 16, padding: '28px 20px',
+            cursor: 'pointer', textAlign: 'left', transition: 'all 0.2s',
+            boxShadow: '0 2px 8px rgba(0,0,0,0.06)'
+          }}
+            onMouseEnter={e => { (e.currentTarget as HTMLElement).style.transform = 'translateY(-3px)'; (e.currentTarget as HTMLElement).style.boxShadow = `0 8px 24px ${m.color}30` }}
+            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.transform = ''; (e.currentTarget as HTMLElement).style.boxShadow = '0 2px 8px rgba(0,0,0,0.06)' }}>
+            <div style={{ fontSize: 40, marginBottom: 12 }}>{m.icon}</div>
+            <div style={{ fontWeight: 700, fontSize: 16, color: '#1e293b', marginBottom: 4 }}>{m.label}</div>
+            <div style={{ fontSize: 13, color: '#64748b' }}>{m.desc}</div>
+          </button>
+        ))}
+      </div>
+      {success && <div style={{ marginTop: 24, padding: '14px 20px', background: '#d1fae5', borderRadius: 10, color: '#065f46', fontWeight: 600 }}>{success}</div>}
+    </div>
+  )
+
+  // ── ARCHIVIO ──────────────────────────────────────────────────────────────
+  if (modalita === 'archivio') return (
+    <div style={{ padding: 24 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 24 }}>
+        <button onClick={() => setModalita('home')} style={{ background: '#f1f5f9', border: 'none', borderRadius: 8, padding: '8px 16px', cursor: 'pointer', fontWeight: 600 }}>← Indietro</button>
+        <h2 style={{ fontSize: 22, fontWeight: 800, color: '#1e293b', margin: 0 }}>📋 Archivio Vendite</h2>
+      </div>
+      <div style={{ background: '#fff', borderRadius: 12, overflow: 'hidden', boxShadow: '0 2px 8px rgba(0,0,0,0.08)' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead><tr style={{ background: '#f8fafc' }}>
+            {['Data', 'Cliente', 'Listino', 'Pagamento', 'Totale', 'Stato'].map(h => (
+              <th key={h} style={{ padding: '12px 16px', textAlign: 'left', fontSize: 12, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', borderBottom: '1px solid #e2e8f0' }}>{h}</th>
+            ))}
+          </tr></thead>
+          <tbody>
+            {vendite.map((v, i) => (
+              <tr key={v.id} style={{ borderBottom: '1px solid #f1f5f9', background: i % 2 === 0 ? '#fff' : '#fafafa' }}>
+                <td style={{ padding: '12px 16px', fontSize: 13 }}>{new Date(v.created_at).toLocaleDateString('it-IT')}</td>
+                <td style={{ padding: '12px 16px', fontSize: 13, fontWeight: 600 }}>{v.cliente_nome || 'Generico'}</td>
+                <td style={{ padding: '12px 16px', fontSize: 13 }}>{v.listino || 'Base'}</td>
+                <td style={{ padding: '12px 16px', fontSize: 13 }}>{v.pagamento || '-'}</td>
+                <td style={{ padding: '12px 16px', fontSize: 14, fontWeight: 700, color: '#059669' }}>€ {Number(v.totale || 0).toFixed(2)}</td>
+                <td style={{ padding: '12px 16px' }}><span style={{ background: '#d1fae5', color: '#065f46', borderRadius: 20, padding: '3px 10px', fontSize: 12, fontWeight: 600 }}>Completata</span></td>
+              </tr>
+            ))}
+            {vendite.length === 0 && <tr><td colSpan={6} style={{ padding: 40, textAlign: 'center', color: '#94a3b8' }}>Nessuna vendita registrata</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+
+  // ── VENDITA (veloce + scan) ───────────────────────────────────────────────
   return (
-    <div style={{ padding: '20px', maxWidth: '1400px', margin: '0 auto' }}>
-      {error && <div style={{ background: '#fee2e2', color: '#991b1b', padding: '12px', borderRadius: '8px', marginBottom: '16px', fontSize: '14px', cursor: 'pointer' }} onClick={() => setError('')}>{error} ✕</div>}
-      {success && <div style={{ background: '#dcfce7', color: '#166534', padding: '12px', borderRadius: '8px', marginBottom: '16px', fontSize: '14px', cursor: 'pointer' }} onClick={() => setSuccess('')}>{success} ✕</div>}
+    <div style={{ display: 'flex', height: 'calc(100vh - 60px)', overflow: 'hidden', background: '#f8fafc' }}>
 
-      {/* HOME */}
-      {modalita === 'home' && (
-        <div>
-          <h1 style={{ fontSize: '28px', fontWeight: '800', color: '#0f172a', marginBottom: '8px' }}>Cassa</h1>
-          <p style={{ color: '#64748b', marginBottom: '28px' }}>Seleziona la modalità di vendita</p>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px', marginBottom: '32px' }}>
-            {btnModalita('veloce', '⚡', 'Cassa Veloce', 'Vendita rapida al dettaglio', '#f59e0b')}
-            {btnModalita('scan', '📷', 'Scan & Go', 'Scansiona barcode continuamente', '#3b82f6')}
-            {btnModalita('conti', '🍽️', 'Gestione Conti', 'Tavoli e conti aperti', '#22c55e')}
-            {btnModalita('ingrosso', '🏭', 'Cassa Ingrosso', 'Vendita B2B con listini', '#8b5cf6')}
-            {btnModalita('archivio', '📋', 'Archivio Documenti', 'Storico vendite e fatture', '#64748b')}
-            {btnModalita('chiusura', '🔒', 'Chiusura Cassa', 'Riepilogo e chiusura giornata', '#ef4444')}
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '16px' }}>
-            {[
-              { label: 'Vendite Oggi', value: kpiVendite.oggi, color: '#3b82f6' },
-              { label: 'Incasso Oggi', value: '€' + kpiVendite.totaleOggi.toFixed(2), color: '#22c55e' },
-              { label: 'Contanti', value: '€' + kpiVendite.contanti.toFixed(2), color: '#f59e0b' },
-              { label: 'Carta', value: '€' + kpiVendite.carta.toFixed(2), color: '#8b5cf6' },
-            ].map(k => (
-              <div key={k.label} style={{ background: 'white', borderRadius: '12px', padding: '16px', boxShadow: '0 1px 4px rgba(0,0,0,0.08)', borderLeft: `4px solid ${k.color}` }}>
-                <div style={{ fontSize: '22px', fontWeight: '800', color: k.color }}>{k.value}</div>
-                <div style={{ fontSize: '13px', color: '#64748b', marginTop: '4px' }}>{k.label}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+      {/* COLONNA SINISTRA: articoli */}
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', borderRight: '1px solid #e2e8f0' }}>
 
-      {/* SCAN & GO */}
-      {modalita === 'scan' && (
-        <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '20px' }}>
-            <button onClick={() => setModalita('home')} style={{ background: '#f1f5f9', border: 'none', borderRadius: '8px', padding: '8px 16px', cursor: 'pointer', fontWeight: '600' }}>← Indietro</button>
-            <h2 style={{ margin: 0, fontSize: '22px', fontWeight: '800' }}>📷 Scan & Go</h2>
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 380px', gap: '20px' }}>
-            <div>
-              <div style={{ background: scanFeedback === 'ok' ? '#dcfce7' : scanFeedback === 'error' ? '#fee2e2' : 'white', borderRadius: '16px', padding: '24px', marginBottom: '16px', boxShadow: '0 2px 8px rgba(0,0,0,0.1)', border: `3px solid ${scanFeedback === 'ok' ? '#22c55e' : scanFeedback === 'error' ? '#ef4444' : '#e2e8f0'}`, transition: 'all 0.3s' }}>
-                <div style={{ fontSize: '14px', fontWeight: '700', color: '#64748b', marginBottom: '8px' }}>SCANSIONA O DIGITA BARCODE / CODICE</div>
-                <input ref={barcodeRef} value={barcode} onChange={e => setBarcode(e.target.value)} onKeyDown={scanBarcode}
-                  autoFocus placeholder="Punta il lettore barcode qui..." autoComplete="off"
-                  style={{ width: '100%', border: '2px solid #3b82f6', borderRadius: '10px', padding: '16px', fontSize: '20px', outline: 'none', boxSizing: 'border-box', fontWeight: '600', letterSpacing: '2px' }} />
-                {ultimoScan && (
-                  <div style={{ marginTop: '12px', fontSize: '16px', fontWeight: '700', color: scanFeedback === 'error' ? '#ef4444' : '#22c55e' }}>
-                    {scanFeedback === 'ok' ? '✅ ' : '❌ '}{ultimoScan}
-                  </div>
-                )}
-              </div>
-              <div style={{ background: 'white', borderRadius: '12px', padding: '16px', boxShadow: '0 1px 4px rgba(0,0,0,0.08)' }}>
-                <h3 style={{ margin: '0 0 12px', fontSize: '16px', fontWeight: '700' }}>Articoli aggiunti ({carrello.length} righe)</h3>
-                {carrello.length === 0 ? (
-                  <div style={{ textAlign: 'center', padding: '40px', color: '#94a3b8' }}>
-                    <div style={{ fontSize: '40px' }}>📦</div>
-                    <p>Scansiona il primo articolo</p>
-                  </div>
-                ) : (
-                  <div style={{ display: 'grid', gap: '8px', maxHeight: '400px', overflowY: 'auto' }}>
-                    {[...carrello].reverse().map((r, i) => (
-                      <div key={r.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', background: i === 0 ? '#eff6ff' : '#f8fafc', borderRadius: '8px', border: i === 0 ? '2px solid #3b82f6' : '1px solid #e2e8f0' }}>
-                        <div>
-                          <div style={{ fontWeight: '700', fontSize: '15px' }}>{r.nome}</div>
-                          <div style={{ fontSize: '12px', color: '#64748b' }}>{r.codice} • €{r.prezzo.toFixed(2)}/pz</div>
-                        </div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                          <button onClick={() => aggiornaQta(r.id, r.qta - 1)} style={{ background: '#fee2e2', color: '#ef4444', border: 'none', borderRadius: '6px', width: '28px', height: '28px', cursor: 'pointer', fontWeight: '800' }}>-</button>
-                          <span style={{ fontWeight: '800', fontSize: '16px', minWidth: '24px', textAlign: 'center' }}>{r.qta}</span>
-                          <button onClick={() => aggiornaQta(r.id, r.qta + 1)} style={{ background: '#dcfce7', color: '#22c55e', border: 'none', borderRadius: '6px', width: '28px', height: '28px', cursor: 'pointer', fontWeight: '800' }}>+</button>
-                          <span style={{ fontWeight: '800', color: '#0f172a', minWidth: '60px', textAlign: 'right' }}>€{r.totale.toFixed(2)}</span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-            {/* Totale fisso */}
-            <div style={{ position: 'sticky', top: '20px', height: 'fit-content' }}>
-              <div style={{ background: 'white', borderRadius: '16px', padding: '24px', boxShadow: '0 4px 16px rgba(0,0,0,0.1)' }}>
-                <h3 style={{ margin: '0 0 16px', fontSize: '18px', fontWeight: '800' }}>Totale</h3>
-                <div style={{ fontSize: '42px', fontWeight: '900', color: '#0f172a', marginBottom: '8px' }}>€{totale.toFixed(2)}</div>
-                <div style={{ fontSize: '14px', color: '#64748b', marginBottom: '20px' }}>{carrello.reduce((s, r) => s + r.qta, 0)} articoli</div>
-                <div style={{ display: 'grid', gap: '8px', marginBottom: '16px' }}>
-                  {['contanti', 'carta', 'bonifico'].map(p => (
-                    <button key={p} onClick={() => setPagamento(p)}
-                      style={{ padding: '12px', border: `2px solid ${pagamento === p ? '#3b82f6' : '#e2e8f0'}`, borderRadius: '8px', background: pagamento === p ? '#eff6ff' : 'white', cursor: 'pointer', fontWeight: '600', fontSize: '14px', color: pagamento === p ? '#3b82f6' : '#374151' }}>
-                      {p === 'contanti' ? '💵 Contanti' : p === 'carta' ? '💳 Carta' : '🏦 Bonifico'}
-                    </button>
-                  ))}
-                </div>
-                {pagamento === 'contanti' && (
-                  <div style={{ marginBottom: '16px' }}>
-                    <label style={{ fontSize: '13px', fontWeight: '600', color: '#374151' }}>Contanti dati</label>
-                    <input type="number" value={contantiDati || ''} onChange={e => setContantiDati(Number(e.target.value))}
-                      style={{ width: '100%', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '10px', fontSize: '18px', fontWeight: '700', marginTop: '4px', outline: 'none', boxSizing: 'border-box' }} />
-                    {contantiDati >= totale && <div style={{ marginTop: '8px', fontSize: '18px', fontWeight: '800', color: '#22c55e' }}>Resto: €{(contantiDati - totale).toFixed(2)}</div>}
-                  </div>
-                )}
-                <button onClick={() => completaVendita('scontrino')} disabled={loading || carrello.length === 0}
-                  style={{ width: '100%', background: carrello.length === 0 ? '#94a3b8' : '#22c55e', color: 'white', border: 'none', borderRadius: '10px', padding: '16px', fontWeight: '800', cursor: 'pointer', fontSize: '18px' }}>
-                  {loading ? '⏳...' : '✅ PAGA €' + totale.toFixed(2)}
-                </button>
-                <button onClick={() => setCarrello([])} style={{ width: '100%', marginTop: '8px', background: '#fef2f2', color: '#ef4444', border: 'none', borderRadius: '8px', padding: '10px', fontWeight: '600', cursor: 'pointer' }}>🗑️ Svuota</button>
-              </div>
+        {/* Header */}
+        <div style={{ padding: '16px 20px', background: '#fff', borderBottom: '1px solid #e2e8f0' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+            <button onClick={() => setModalita('home')} style={{ background: '#f1f5f9', border: 'none', borderRadius: 8, padding: '6px 14px', cursor: 'pointer', fontWeight: 600, fontSize: 13 }}>← Indietro</button>
+            <h2 style={{ margin: 0, fontSize: 18, fontWeight: 800, color: '#1e293b' }}>
+              {modalita === 'scan' ? '📷 Scansione' : '⚡ Vendita Veloce'}
+            </h2>
+            <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+              <button onClick={() => setModalita('veloce')} style={{ padding: '6px 14px', borderRadius: 8, border: 'none', background: modalita === 'veloce' ? '#3b82f6' : '#f1f5f9', color: modalita === 'veloce' ? '#fff' : '#374151', cursor: 'pointer', fontWeight: 600, fontSize: 13 }}>⚡ Veloce</button>
+              <button onClick={() => setModalita('scan')} style={{ padding: '6px 14px', borderRadius: 8, border: 'none', background: modalita === 'scan' ? '#8b5cf6' : '#f1f5f9', color: modalita === 'scan' ? '#fff' : '#374151', cursor: 'pointer', fontWeight: 600, fontSize: 13 }}>📷 Scan</button>
             </div>
           </div>
-        </div>
-      )}
 
-      {/* CASSA VELOCE */}
-      {modalita === 'veloce' && (
-        <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '20px' }}>
-            <button onClick={() => setModalita('home')} style={{ background: '#f1f5f9', border: 'none', borderRadius: '8px', padding: '8px 16px', cursor: 'pointer', fontWeight: '600' }}>← Indietro</button>
-            <h2 style={{ margin: 0, fontSize: '22px', fontWeight: '800' }}>⚡ Cassa Veloce</h2>
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 380px', gap: '20px' }}>
-            <div>
-              <input placeholder="🔍 Cerca articolo per nome o codice..." value={cerca} onChange={e => setCerca(e.target.value)}
-                style={{ width: '100%', border: '1px solid #e2e8f0', borderRadius: '10px', padding: '12px 16px', fontSize: '15px', outline: 'none', marginBottom: '16px', boxSizing: 'border-box' }} />
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: '12px', maxHeight: '500px', overflowY: 'auto' }}>
-                {artFiltrati.map(a => (
-                  <button key={a.id} onClick={() => aggiungiAlCarrello(a)}
-                    style={{ background: 'white', border: '2px solid #e2e8f0', borderRadius: '12px', padding: '16px', cursor: 'pointer', textAlign: 'left', transition: 'all 0.15s' }}
-                    onMouseEnter={e => { e.currentTarget.style.borderColor = '#3b82f6'; e.currentTarget.style.background = '#eff6ff' }}
-                    onMouseLeave={e => { e.currentTarget.style.borderColor = '#e2e8f0'; e.currentTarget.style.background = 'white' }}>
-                    <div style={{ fontSize: '11px', color: '#94a3b8', marginBottom: '4px' }}>{a.codice}</div>
-                    <div style={{ fontWeight: '700', fontSize: '14px', color: '#0f172a', marginBottom: '8px', lineHeight: '1.3' }}>{a.nome}</div>
-                    <div style={{ fontWeight: '800', fontSize: '18px', color: '#3b82f6' }}>€{a.prezzo_base?.toFixed(2)}</div>
-                    <div style={{ fontSize: '11px', color: a.stock <= a.stock_minimo && a.stock_minimo > 0 ? '#ef4444' : '#94a3b8', marginTop: '4px' }}>Stock: {a.stock} {a.um}</div>
-                  </button>
-                ))}
+          {/* Intestazione cliente */}
+          <div style={{ background: clienteSelezionato ? '#eff6ff' : '#f8fafc', border: `1px solid ${clienteSelezionato ? '#bfdbfe' : '#e2e8f0'}`, borderRadius: 10, padding: '10px 14px', marginBottom: 10 }}>
+            {clienteSelezionato ? (
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <div>
+                  <div style={{ fontWeight: 700, color: '#1e40af', fontSize: 15 }}>👤 {clienteSelezionato.nome}</div>
+                  <div style={{ fontSize: 12, color: '#64748b' }}>
+                    {clienteSelezionato.citta && `${clienteSelezionato.citta} · `}
+                    {clienteSelezionato.sconto > 0 && `Sconto: ${clienteSelezionato.sconto}% · `}
+                    Fido: €{Number(clienteSelezionato.fido || 0).toFixed(0)}
+                  </div>
+                </div>
+                <button onClick={() => setClienteSelezionato(null)} style={{ background: '#fee2e2', border: 'none', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', color: '#dc2626', fontWeight: 700, fontSize: 13 }}>✕ Rimuovi</button>
               </div>
-            </div>
-            <div style={{ position: 'sticky', top: '20px', height: 'fit-content' }}>
-              <div style={{ background: 'white', borderRadius: '16px', padding: '20px', boxShadow: '0 4px 16px rgba(0,0,0,0.1)' }}>
-                <h3 style={{ margin: '0 0 12px', fontWeight: '800' }}>Carrello</h3>
-                <div style={{ maxHeight: '300px', overflowY: 'auto', marginBottom: '12px' }}>
-                  {carrello.length === 0 ? <div style={{ textAlign: 'center', padding: '30px', color: '#94a3b8', fontSize: '14px' }}>Clicca sugli articoli per aggiungerli</div> : carrello.map(r => (
-                    <div key={r.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: '1px solid #f1f5f9' }}>
-                      <div style={{ flex: 1 }}>
-                        <div style={{ fontWeight: '600', fontSize: '13px' }}>{r.nome}</div>
-                        <div style={{ fontSize: '12px', color: '#64748b' }}>€{r.prezzo.toFixed(2)}</div>
-                      </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                        <button onClick={() => aggiornaQta(r.id, r.qta - 1)} style={{ background: '#fee2e2', color: '#ef4444', border: 'none', borderRadius: '4px', width: '24px', height: '24px', cursor: 'pointer', fontWeight: '800', fontSize: '14px' }}>-</button>
-                        <span style={{ fontWeight: '700', minWidth: '20px', textAlign: 'center' }}>{r.qta}</span>
-                        <button onClick={() => aggiornaQta(r.id, r.qta + 1)} style={{ background: '#dcfce7', color: '#22c55e', border: 'none', borderRadius: '4px', width: '24px', height: '24px', cursor: 'pointer', fontWeight: '800', fontSize: '14px' }}>+</button>
-                        <span style={{ fontWeight: '700', minWidth: '55px', textAlign: 'right', fontSize: '13px' }}>€{r.totale.toFixed(2)}</span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-                <div style={{ borderTop: '2px solid #e2e8f0', paddingTop: '12px', marginBottom: '12px' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '14px', color: '#64748b', marginBottom: '4px' }}>
-                    <span>Subtotale</span><span>€{subtotale.toFixed(2)}</span>
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
-                    <span style={{ fontSize: '14px', color: '#64748b' }}>Sconto %</span>
-                    <input type="number" min="0" max="100" value={scontoTotale} onChange={e => setScontoTotale(Number(e.target.value))}
-                      style={{ width: '60px', border: '1px solid #e2e8f0', borderRadius: '6px', padding: '4px 8px', fontSize: '14px', outline: 'none' }} />
-                    <span style={{ fontSize: '14px', color: '#ef4444' }}>-€{scontoImporto.toFixed(2)}</span>
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: '800', fontSize: '20px' }}>
-                    <span>TOTALE</span><span style={{ color: '#3b82f6' }}>€{totale.toFixed(2)}</span>
-                  </div>
-                </div>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '6px', marginBottom: '12px' }}>
-                  {['contanti', 'carta', 'bonifico'].map(p => (
-                    <button key={p} onClick={() => setPagamento(p)}
-                      style={{ padding: '8px 4px', border: `2px solid ${pagamento === p ? '#3b82f6' : '#e2e8f0'}`, borderRadius: '8px', background: pagamento === p ? '#eff6ff' : 'white', cursor: 'pointer', fontWeight: '600', fontSize: '12px', color: pagamento === p ? '#3b82f6' : '#374151' }}>
-                      {p === 'contanti' ? '💵' : p === 'carta' ? '💳' : '🏦'} {p}
-                    </button>
-                  ))}
-                </div>
-                {pagamento === 'contanti' && (
-                  <div style={{ marginBottom: '12px' }}>
-                    <input type="number" placeholder="Contanti dati..." value={contantiDati || ''} onChange={e => setContantiDati(Number(e.target.value))}
-                      style={{ width: '100%', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '8px', fontSize: '16px', fontWeight: '700', outline: 'none', boxSizing: 'border-box' }} />
-                    {contantiDati >= totale && totale > 0 && <div style={{ marginTop: '6px', fontWeight: '800', color: '#22c55e' }}>Resto: €{(contantiDati - totale).toFixed(2)}</div>}
-                  </div>
-                )}
-                <div style={{ display: 'grid', gap: '6px' }}>
-                  <button onClick={() => completaVendita('scontrino')} disabled={loading || carrello.length === 0}
-                    style={{ background: carrello.length === 0 ? '#94a3b8' : '#22c55e', color: 'white', border: 'none', borderRadius: '8px', padding: '12px', fontWeight: '800', cursor: 'pointer', fontSize: '15px' }}>
-                    🧾 Scontrino €{totale.toFixed(2)}
-                  </button>
-                  <button onClick={() => completaVendita('fattura')} disabled={loading || carrello.length === 0}
-                    style={{ background: carrello.length === 0 ? '#94a3b8' : '#3b82f6', color: 'white', border: 'none', borderRadius: '8px', padding: '12px', fontWeight: '700', cursor: 'pointer', fontSize: '14px' }}>
-                    📄 Emetti Fattura
-                  </button>
-                  <button onClick={() => setCarrello([])} style={{ background: '#fef2f2', color: '#ef4444', border: 'none', borderRadius: '8px', padding: '10px', fontWeight: '600', cursor: 'pointer' }}>🗑️ Svuota Carrello</button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* GESTIONE CONTI */}
-      {modalita === 'conti' && !contoAttivo && (
-        <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '20px' }}>
-            <button onClick={() => setModalita('home')} style={{ background: '#f1f5f9', border: 'none', borderRadius: '8px', padding: '8px 16px', cursor: 'pointer', fontWeight: '600' }}>← Indietro</button>
-            <h2 style={{ margin: 0, fontSize: '22px', fontWeight: '800' }}>🍽️ Gestione Conti</h2>
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '16px', marginBottom: '20px' }}>
-            {conti.map(c => (
-              <div key={c.id} style={{ background: 'white', borderRadius: '12px', padding: '20px', boxShadow: '0 2px 8px rgba(0,0,0,0.1)', cursor: 'pointer', border: '2px solid #e2e8f0' }}
-                onClick={() => setContoAttivo(c.id)}>
-                <div style={{ fontSize: '24px', marginBottom: '8px' }}>{c.tipo === 'tavolo' ? '🍽️' : c.tipo === 'ingrosso' ? '🏭' : c.tipo === 'scan' ? '📷' : '👤'}</div>
-                <div style={{ fontWeight: '800', fontSize: '16px', marginBottom: '4px' }}>{c.nome}</div>
-                <div style={{ fontSize: '13px', color: '#64748b' }}>{c.righe.length} articoli</div>
-                <div style={{ fontWeight: '700', color: '#22c55e', marginTop: '8px' }}>€{c.righe.reduce((s, r) => s + r.totale, 0).toFixed(2)}</div>
-              </div>
-            ))}
-            {['Tavolo', 'Cliente', 'Ingrosso', 'Scan'].map(tipo => (
-              <button key={tipo} onClick={() => { const nome = prompt(`Nome ${tipo}:`); if (nome) apriNuovoConto(nome, tipo.toLowerCase()) }}
-                style={{ background: '#f8fafc', border: '2px dashed #cbd5e1', borderRadius: '12px', padding: '20px', cursor: 'pointer', color: '#64748b', fontWeight: '600' }}>
-                + Nuovo {tipo}
+            ) : (
+              <button onClick={() => setShowCercaCliente(true)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#3b82f6', fontWeight: 600, fontSize: 14, padding: 0 }}>
+                + Associa cliente (opzionale)
               </button>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* CONTO ATTIVO */}
-      {modalita === 'conti' && contoAttivo && contoAttivoData && (
-        <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '20px' }}>
-            <button onClick={() => setContoAttivo(null)} style={{ background: '#f1f5f9', border: 'none', borderRadius: '8px', padding: '8px 16px', cursor: 'pointer', fontWeight: '600' }}>← Conti</button>
-            <h2 style={{ margin: 0, fontSize: '22px', fontWeight: '800' }}>{contoAttivoData.nome}</h2>
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 360px', gap: '20px' }}>
-            <div>
-              <input placeholder="🔍 Cerca articolo..." value={cerca} onChange={e => setCerca(e.target.value)}
-                style={{ width: '100%', border: '1px solid #e2e8f0', borderRadius: '10px', padding: '12px', fontSize: '15px', outline: 'none', marginBottom: '16px', boxSizing: 'border-box' }} />
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: '10px', maxHeight: '450px', overflowY: 'auto' }}>
-                {artFiltrati.map(a => (
-                  <button key={a.id} onClick={() => aggiungiARigaConto(contoAttivo, a)}
-                    style={{ background: 'white', border: '2px solid #e2e8f0', borderRadius: '10px', padding: '14px', cursor: 'pointer', textAlign: 'left' }}>
-                    <div style={{ fontWeight: '700', fontSize: '13px', marginBottom: '6px' }}>{a.nome}</div>
-                    <div style={{ fontWeight: '800', color: '#22c55e' }}>€{a.prezzo_base?.toFixed(2)}</div>
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div style={{ position: 'sticky', top: '20px', height: 'fit-content' }}>
-              <div style={{ background: 'white', borderRadius: '16px', padding: '20px', boxShadow: '0 4px 16px rgba(0,0,0,0.1)' }}>
-                <h3 style={{ margin: '0 0 12px', fontWeight: '800' }}>Conto: {contoAttivoData.nome}</h3>
-                <div style={{ maxHeight: '300px', overflowY: 'auto', marginBottom: '12px' }}>
-                  {contoAttivoData.righe.length === 0 ? <div style={{ textAlign: 'center', padding: '20px', color: '#94a3b8', fontSize: '14px' }}>Nessun articolo</div> : contoAttivoData.righe.map(r => (
-                    <div key={r.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: '1px solid #f1f5f9' }}>
-                      <div style={{ flex: 1 }}>
-                        <div style={{ fontWeight: '600', fontSize: '13px' }}>{r.nome}</div>
-                        <div style={{ fontSize: '12px', color: '#64748b' }}>x{r.qta} • €{r.prezzo.toFixed(2)}</div>
-                      </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                        <span style={{ fontWeight: '700', fontSize: '13px' }}>€{r.totale.toFixed(2)}</span>
-                        <button onClick={() => eliminaRigaConto(r.id)} style={{ background: '#fef2f2', color: '#ef4444', border: 'none', borderRadius: '4px', width: '22px', height: '22px', cursor: 'pointer', fontSize: '12px' }}>✕</button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-                <div style={{ borderTop: '2px solid #e2e8f0', paddingTop: '12px', marginBottom: '12px' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: '800', fontSize: '20px' }}>
-                    <span>TOTALE</span>
-                    <span style={{ color: '#22c55e' }}>€{contoAttivoData.righe.reduce((s, r) => s + r.totale, 0).toFixed(2)}</span>
-                  </div>
-                </div>
-                <button onClick={() => chiudiConto(contoAttivo)}
-                  style={{ width: '100%', background: '#22c55e', color: 'white', border: 'none', borderRadius: '10px', padding: '14px', fontWeight: '800', cursor: 'pointer', fontSize: '16px' }}>
-                  💳 Chiudi e Paga
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* CASSA INGROSSO */}
-      {modalita === 'ingrosso' && (
-        <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '20px' }}>
-            <button onClick={() => setModalita('home')} style={{ background: '#f1f5f9', border: 'none', borderRadius: '8px', padding: '8px 16px', cursor: 'pointer', fontWeight: '600' }}>← Indietro</button>
-            <h2 style={{ margin: 0, fontSize: '22px', fontWeight: '800' }}>🏭 Cassa Ingrosso</h2>
-          </div>
-          <div style={{ background: 'white', borderRadius: '12px', padding: '16px', marginBottom: '16px', boxShadow: '0 1px 4px rgba(0,0,0,0.08)' }}>
-            <label style={{ fontSize: '13px', fontWeight: '700', color: '#374151', display: 'block', marginBottom: '8px' }}>Seleziona Cliente</label>
-            <select value={clienteSelezionato?.id || ''} onChange={e => setClienteSelezionato(clienti.find(c => c.id === e.target.value) || null)}
-              style={{ width: '100%', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '10px', fontSize: '14px', outline: 'none' }}>
-              <option value="">-- Seleziona cliente --</option>
-              {clienti.map(c => <option key={c.id} value={c.id}>{c.nome} — Listino: {c.listino} — Sconto: {c.sconto}%</option>)}
-            </select>
-            {clienteSelezionato && (
-              <div style={{ display: 'flex', gap: '16px', marginTop: '10px', fontSize: '13px', flexWrap: 'wrap' }}>
-                <span style={{ background: '#eff6ff', color: '#3b82f6', padding: '4px 10px', borderRadius: '8px', fontWeight: '600' }}>Listino: {clienteSelezionato.listino}</span>
-                <span style={{ background: '#f0fdf4', color: '#22c55e', padding: '4px 10px', borderRadius: '8px', fontWeight: '600' }}>Sconto: {clienteSelezionato.sconto}%</span>
-                {clienteSelezionato.fido > 0 && <span style={{ background: '#fefce8', color: '#ca8a04', padding: '4px 10px', borderRadius: '8px', fontWeight: '600' }}>Fido: €{clienteSelezionato.fido}</span>}
-              </div>
             )}
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 380px', gap: '20px' }}>
-            <div>
-              <input placeholder="🔍 Cerca articolo..." value={cerca} onChange={e => setCerca(e.target.value)}
-                style={{ width: '100%', border: '1px solid #e2e8f0', borderRadius: '10px', padding: '12px', fontSize: '15px', outline: 'none', marginBottom: '16px', boxSizing: 'border-box' }} />
-              <div style={{ display: 'grid', gap: '8px', maxHeight: '450px', overflowY: 'auto' }}>
-                {artFiltrati.map(a => {
-                  const prezzo = clienteSelezionato ? (clienteSelezionato.listino === 'premium' ? a.prezzo_premium : clienteSelezionato.listino === 'rivenditori' ? a.prezzo_rivenditori : a.prezzo_base) : a.prezzo_base
-                  return (
-                    <div key={a.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'white', borderRadius: '10px', padding: '12px 16px', boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
-                      <div>
-                        <div style={{ fontWeight: '700' }}>{a.nome}</div>
-                        <div style={{ fontSize: '12px', color: '#64748b' }}>{a.codice} {a.ean ? `• EAN: ${a.ean}` : ''} • Stock: {a.stock}</div>
-                      </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                        <span style={{ fontWeight: '800', color: '#8b5cf6', fontSize: '18px' }}>€{prezzo?.toFixed(2)}</span>
-                        <button onClick={() => aggiungiAlCarrello(a)} style={{ background: '#8b5cf6', color: 'white', border: 'none', borderRadius: '8px', padding: '8px 16px', cursor: 'pointer', fontWeight: '700' }}>+ Aggiungi</button>
-                      </div>
-                    </div>
-                  )
-                })}
-              </div>
-            </div>
-            <div style={{ position: 'sticky', top: '20px', height: 'fit-content' }}>
-              <div style={{ background: 'white', borderRadius: '16px', padding: '20px', boxShadow: '0 4px 16px rgba(0,0,0,0.1)' }}>
-                <h3 style={{ margin: '0 0 12px', fontWeight: '800' }}>Ordine</h3>
-                <div style={{ maxHeight: '280px', overflowY: 'auto', marginBottom: '12px' }}>
-                  {carrello.length === 0 ? <div style={{ textAlign: 'center', padding: '20px', color: '#94a3b8', fontSize: '14px' }}>Nessun articolo</div> : carrello.map(r => (
-                    <div key={r.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: '1px solid #f1f5f9' }}>
-                      <div style={{ flex: 1 }}>
-                        <div style={{ fontWeight: '600', fontSize: '13px' }}>{r.nome}</div>
-                        <div style={{ fontSize: '12px', color: '#64748b' }}>x{r.qta} • €{r.prezzo.toFixed(2)}</div>
-                      </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                        <button onClick={() => aggiornaQta(r.id, r.qta - 1)} style={{ background: '#fee2e2', color: '#ef4444', border: 'none', borderRadius: '4px', width: '22px', height: '22px', cursor: 'pointer', fontWeight: '800' }}>-</button>
-                        <span style={{ fontWeight: '700', minWidth: '20px', textAlign: 'center', fontSize: '13px' }}>{r.qta}</span>
-                        <button onClick={() => aggiornaQta(r.id, r.qta + 1)} style={{ background: '#dcfce7', color: '#22c55e', border: 'none', borderRadius: '4px', width: '22px', height: '22px', cursor: 'pointer', fontWeight: '800' }}>+</button>
-                        <span style={{ fontWeight: '700', minWidth: '55px', textAlign: 'right', fontSize: '13px' }}>€{r.totale.toFixed(2)}</span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-                <div style={{ borderTop: '2px solid #e2e8f0', paddingTop: '12px', marginBottom: '12px' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: '800', fontSize: '20px' }}>
-                    <span>TOTALE</span><span style={{ color: '#8b5cf6' }}>€{totale.toFixed(2)}</span>
-                  </div>
-                </div>
-                <div style={{ display: 'grid', gap: '6px' }}>
-                  <button onClick={() => completaVendita('fattura')} disabled={loading || carrello.length === 0}
-                    style={{ background: carrello.length === 0 ? '#94a3b8' : '#8b5cf6', color: 'white', border: 'none', borderRadius: '8px', padding: '12px', fontWeight: '800', cursor: 'pointer' }}>📄 Emetti Fattura</button>
-                  <button onClick={() => completaVendita('ddt')} disabled={loading || carrello.length === 0}
-                    style={{ background: carrello.length === 0 ? '#94a3b8' : '#3b82f6', color: 'white', border: 'none', borderRadius: '8px', padding: '10px', fontWeight: '700', cursor: 'pointer' }}>🚚 Emetti DDT</button>
-                  <button onClick={() => completaVendita('preventivo')} disabled={loading || carrello.length === 0}
-                    style={{ background: carrello.length === 0 ? '#94a3b8' : '#f59e0b', color: 'white', border: 'none', borderRadius: '8px', padding: '10px', fontWeight: '700', cursor: 'pointer' }}>📋 Crea Preventivo</button>
-                  <button onClick={() => setCarrello([])} style={{ background: '#fef2f2', color: '#ef4444', border: 'none', borderRadius: '8px', padding: '8px', fontWeight: '600', cursor: 'pointer' }}>🗑️ Svuota</button>
-                </div>
-              </div>
+
+          {/* Listino e Pagamento */}
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span style={{ fontSize: 12, color: '#64748b', fontWeight: 600 }}>LISTINO:</span>
+              {LISTINI.map(l => (
+                <button key={l} onClick={() => setListino(l)} style={{
+                  padding: '4px 10px', borderRadius: 6, border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 600,
+                  background: listino === l ? '#3b82f6' : '#f1f5f9', color: listino === l ? '#fff' : '#374151'
+                }}>{l}</button>
+              ))}
             </div>
           </div>
-        </div>
-      )}
 
-      {/* ARCHIVIO */}
-      {modalita === 'archivio' && (
-        <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '20px' }}>
-            <button onClick={() => setModalita('home')} style={{ background: '#f1f5f9', border: 'none', borderRadius: '8px', padding: '8px 16px', cursor: 'pointer', fontWeight: '600' }}>← Indietro</button>
-            <h2 style={{ margin: 0, fontSize: '22px', fontWeight: '800' }}>📋 Archivio Documenti</h2>
+          {/* Barcode o ricerca */}
+          {modalita === 'scan' ? (
+            <div style={{ marginTop: 10 }}>
+              <input ref={barcodeRef} value={barcode} onChange={e => setBarcode(e.target.value)} onKeyDown={handleBarcode}
+                placeholder="Scansiona barcode o digita codice + Invio..."
+                style={{ width: '100%', padding: '10px 14px', borderRadius: 8, border: `2px solid ${scanFeedback === 'ok' ? '#10b981' : scanFeedback === 'error' ? '#ef4444' : '#e2e8f0'}`, fontSize: 14, outline: 'none', boxSizing: 'border-box' }} />
+              {scanFeedback && <div style={{ marginTop: 6, fontSize: 13, color: scanFeedback === 'ok' ? '#10b981' : '#ef4444', fontWeight: 600 }}>
+                {scanFeedback === 'ok' ? `✅ ${ultimoScan}` : `❌ Articolo non trovato: ${ultimoScan}`}
+              </div>}
+            </div>
+          ) : (
+            <input value={cerca} onChange={e => setCerca(e.target.value)}
+              placeholder="🔍 Cerca articolo per nome, codice o EAN..."
+              style={{ marginTop: 10, width: '100%', padding: '10px 14px', borderRadius: 8, border: '1px solid #e2e8f0', fontSize: 14, outline: 'none', boxSizing: 'border-box' }} />
+          )}
+        </div>
+
+        {/* Lista articoli */}
+        <div style={{ flex: 1, overflowY: 'auto', padding: '12px 16px' }}>
+          {modalita === 'veloce' && (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: 10 }}>
+              {artFiltrati.slice(0, 60).map(art => {
+                const prezzo = getPrezzoListino(art)
+                return (
+                  <button key={art.id} onClick={() => aggiungiAlCarrello(art)} style={{
+                    background: '#fff', border: '1px solid #e2e8f0', borderRadius: 10, padding: '12px 10px',
+                    cursor: 'pointer', textAlign: 'left', transition: 'all 0.15s'
+                  }}
+                    onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = '#3b82f6'; (e.currentTarget as HTMLElement).style.background = '#eff6ff' }}
+                    onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = '#e2e8f0'; (e.currentTarget as HTMLElement).style.background = '#fff' }}>
+                    <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 2 }}>{art.codice}</div>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: '#1e293b', marginBottom: 6, lineHeight: 1.3 }}>{art.nome}</div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span style={{ fontSize: 15, fontWeight: 800, color: '#059669' }}>€{prezzo.toFixed(2)}</span>
+                      <span style={{ fontSize: 11, color: art.stock > 0 ? '#10b981' : '#ef4444' }}>
+                        {art.stock > 0 ? `${art.stock} pz` : 'Esaurito'}
+                      </span>
+                    </div>
+                  </button>
+                )
+              })}
+              {artFiltrati.length === 0 && <div style={{ gridColumn: '1/-1', textAlign: 'center', padding: 40, color: '#94a3b8' }}>Nessun articolo trovato</div>}
+            </div>
+          )}
+          {modalita === 'scan' && (
+            <div style={{ textAlign: 'center', padding: '60px 20px', color: '#94a3b8' }}>
+              <div style={{ fontSize: 64, marginBottom: 16 }}>📷</div>
+              <div style={{ fontSize: 16, fontWeight: 600 }}>Pronto per la scansione</div>
+              <div style={{ fontSize: 13, marginTop: 8 }}>Posiziona il cursore nel campo sopra e scansiona il barcode</div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* COLONNA DESTRA: carrello */}
+      <div style={{ width: 380, display: 'flex', flexDirection: 'column', background: '#fff' }}>
+
+        {/* Header carrello */}
+        <div style={{ padding: '16px 20px', borderBottom: '1px solid #e2e8f0', background: '#1e293b' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <h3 style={{ margin: 0, color: '#fff', fontWeight: 700 }}>🛒 Carrello ({carrello.length})</h3>
+            {carrello.length > 0 && <button onClick={() => setCarrello([])} style={{ background: '#ef4444', border: 'none', borderRadius: 6, padding: '4px 10px', color: '#fff', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>Svuota</button>}
           </div>
-          <div style={{ display: 'grid', gap: '10px' }}>
-            {vendite.length === 0 ? (
-              <div style={{ textAlign: 'center', padding: '60px', color: '#64748b', background: 'white', borderRadius: '12px' }}>
-                <div style={{ fontSize: '40px', marginBottom: '12px' }}>📋</div>
-                <p>Nessun documento ancora</p>
-              </div>
-            ) : vendite.map(v => (
-              <div key={v.id} style={{ background: 'white', borderRadius: '10px', padding: '14px 18px', boxShadow: '0 1px 3px rgba(0,0,0,0.06)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
-                <div>
-                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '4px' }}>
-                    <span style={{ fontWeight: '800', fontSize: '15px' }}>{v.numero}</span>
-                    <span style={{ background: '#eff6ff', color: '#3b82f6', padding: '2px 8px', borderRadius: '6px', fontSize: '12px', fontWeight: '600' }}>{v.tipo}</span>
-                    <span style={{ background: v.stato === 'pagata' ? '#dcfce7' : '#fef9c3', color: v.stato === 'pagata' ? '#166534' : '#854d0e', padding: '2px 8px', borderRadius: '6px', fontSize: '12px', fontWeight: '600' }}>{v.stato}</span>
-                  </div>
-                  <div style={{ fontSize: '13px', color: '#64748b' }}>
-                    {v.data} {v.cliente_nome ? `• ${v.cliente_nome}` : ''} • {v.pagamento}
-                  </div>
+          {clienteSelezionato && <div style={{ marginTop: 6, fontSize: 12, color: '#94a3b8' }}>👤 {clienteSelezionato.nome}</div>}
+        </div>
+
+        {/* Righe carrello */}
+        <div style={{ flex: 1, overflowY: 'auto', padding: '8px 0' }}>
+          {carrello.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: '60px 20px', color: '#94a3b8' }}>
+              <div style={{ fontSize: 40, marginBottom: 12 }}>🛒</div>
+              <div>Carrello vuoto</div>
+            </div>
+          ) : carrello.map(r => (
+            <div key={r.id} style={{ padding: '10px 16px', borderBottom: '1px solid #f1f5f9' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 6 }}>
+                <div style={{ flex: 1, marginRight: 8 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: '#1e293b' }}>{r.nome}</div>
+                  <div style={{ fontSize: 11, color: '#94a3b8' }}>{r.codice}{r.colore ? ` · ${r.colore}` : ''}</div>
                 </div>
-                <div style={{ fontWeight: '800', fontSize: '18px', color: '#22c55e' }}>€{v.totale?.toFixed(2)}</div>
+                <button onClick={() => rimuoviRiga(r.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#ef4444', fontSize: 16, padding: 0 }}>✕</button>
               </div>
-            ))}
-          </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <button onClick={() => aggiornaQta(r.id, -1)} style={{ width: 28, height: 28, borderRadius: 6, border: '1px solid #e2e8f0', background: '#f8fafc', cursor: 'pointer', fontWeight: 700 }}>−</button>
+                <span style={{ minWidth: 30, textAlign: 'center', fontWeight: 700, fontSize: 14 }}>{r.qta}</span>
+                <button onClick={() => aggiornaQta(r.id, 1)} style={{ width: 28, height: 28, borderRadius: 6, border: '1px solid #e2e8f0', background: '#f8fafc', cursor: 'pointer', fontWeight: 700 }}>+</button>
+                <span style={{ fontSize: 12, color: '#64748b', marginLeft: 4 }}>× €</span>
+                <input type="number" value={r.prezzo} onChange={e => aggiornaPrezzoRiga(r.id, Number(e.target.value))}
+                  style={{ width: 60, padding: '3px 6px', borderRadius: 6, border: '1px solid #e2e8f0', fontSize: 12, textAlign: 'right' }} />
+                <span style={{ fontSize: 11, color: '#64748b' }}>Sc%</span>
+                <input type="number" value={r.sconto} onChange={e => aggiornaScontoRiga(r.id, Number(e.target.value))}
+                  style={{ width: 40, padding: '3px 6px', borderRadius: 6, border: '1px solid #e2e8f0', fontSize: 12, textAlign: 'right' }} />
+                <span style={{ marginLeft: 'auto', fontWeight: 700, color: '#059669', fontSize: 14 }}>€{r.totale.toFixed(2)}</span>
+              </div>
+            </div>
+          ))}
         </div>
-      )}
 
-      {/* CHIUSURA CASSA */}
-      {modalita === 'chiusura' && (
-        <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '20px' }}>
-            <button onClick={() => setModalita('home')} style={{ background: '#f1f5f9', border: 'none', borderRadius: '8px', padding: '8px 16px', cursor: 'pointer', fontWeight: '600' }}>← Indietro</button>
-            <h2 style={{ margin: 0, fontSize: '22px', fontWeight: '800' }}>🔒 Chiusura Cassa</h2>
+        {/* Totali e pagamento */}
+        <div style={{ borderTop: '2px solid #e2e8f0', padding: '16px 20px', background: '#f8fafc' }}>
+          {/* Sconto totale */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+            <span style={{ fontSize: 13, color: '#64748b', flex: 1 }}>Sconto totale %</span>
+            <input type="number" value={scontoTotale} onChange={e => setScontoTotale(Number(e.target.value))} min={0} max={100}
+              style={{ width: 60, padding: '4px 8px', borderRadius: 6, border: '1px solid #e2e8f0', fontSize: 13, textAlign: 'right' }} />
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px', marginBottom: '24px' }}>
-            {[
-              { label: 'Vendite Oggi', value: kpiVendite.oggi, color: '#3b82f6', icon: '🧾' },
-              { label: 'Totale Giornata', value: '€' + kpiVendite.totaleOggi.toFixed(2), color: '#22c55e', icon: '💰' },
-              { label: 'Incasso Contanti', value: '€' + kpiVendite.contanti.toFixed(2), color: '#f59e0b', icon: '💵' },
-              { label: 'Incasso Carta', value: '€' + kpiVendite.carta.toFixed(2), color: '#8b5cf6', icon: '💳' },
-            ].map(k => (
-              <div key={k.label} style={{ background: 'white', borderRadius: '12px', padding: '20px', boxShadow: '0 1px 4px rgba(0,0,0,0.08)', borderLeft: `4px solid ${k.color}` }}>
-                <div style={{ fontSize: '24px', marginBottom: '8px' }}>{k.icon}</div>
-                <div style={{ fontSize: '26px', fontWeight: '900', color: k.color }}>{k.value}</div>
-                <div style={{ fontSize: '13px', color: '#64748b', marginTop: '4px' }}>{k.label}</div>
-              </div>
-            ))}
-          </div>
-          <div style={{ background: 'white', borderRadius: '12px', padding: '20px', boxShadow: '0 1px 4px rgba(0,0,0,0.08)' }}>
-            <h3 style={{ margin: '0 0 16px', fontWeight: '800' }}>Ultime vendite di oggi</h3>
-            {vendite.filter(v => v.data === new Date().toISOString().split('T')[0]).map(v => (
-              <div key={v.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid #f1f5f9', fontSize: '14px' }}>
-                <span style={{ fontWeight: '600' }}>{v.numero}</span>
-                <span style={{ color: '#64748b' }}>{v.tipo} • {v.pagamento}</span>
-                <span style={{ fontWeight: '700', color: '#22c55e' }}>€{v.totale?.toFixed(2)}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
 
-      {/* Modal pagamento da conto */}
-      {showPaga && carrello.length > 0 && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '20px' }}>
-          <div style={{ background: 'white', borderRadius: '16px', padding: '28px', width: '100%', maxWidth: '400px' }}>
-            <h2 style={{ margin: '0 0 16px', fontWeight: '800' }}>Chiudi Conto</h2>
-            <div style={{ fontSize: '32px', fontWeight: '900', color: '#22c55e', marginBottom: '16px' }}>€{totale.toFixed(2)}</div>
-            <div style={{ display: 'grid', gap: '8px', marginBottom: '16px' }}>
-              {['contanti', 'carta', 'bonifico'].map(p => (
-                <button key={p} onClick={() => setPagamento(p)}
-                  style={{ padding: '12px', border: `2px solid ${pagamento === p ? '#3b82f6' : '#e2e8f0'}`, borderRadius: '8px', background: pagamento === p ? '#eff6ff' : 'white', cursor: 'pointer', fontWeight: '600' }}>
-                  {p === 'contanti' ? '💵 Contanti' : p === 'carta' ? '💳 Carta' : '🏦 Bonifico'}
+          {/* Riepilogo */}
+          <div style={{ background: '#fff', borderRadius: 10, padding: '12px 14px', marginBottom: 12, border: '1px solid #e2e8f0' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: '#64748b', marginBottom: 4 }}>
+              <span>Imponibile</span><span>€{totaleImponibile.toFixed(2)}</span>
+            </div>
+            {scontoTotale > 0 && <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: '#ef4444', marginBottom: 4 }}>
+              <span>Sconto ({scontoTotale}%)</span><span>-€{scontoEuro.toFixed(2)}</span>
+            </div>}
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: '#64748b', marginBottom: 4 }}>
+              <span>IVA 22%</span><span>€{totaleIva.toFixed(2)}</span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 18, fontWeight: 800, color: '#1e293b', borderTop: '1px solid #e2e8f0', paddingTop: 8, marginTop: 4 }}>
+              <span>TOTALE</span><span>€{totaleDovuto.toFixed(2)}</span>
+            </div>
+          </div>
+
+          {/* Metodo pagamento */}
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ fontSize: 12, color: '#64748b', fontWeight: 600, marginBottom: 6 }}>PAGAMENTO</div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 6 }}>
+              {PAGAMENTI.map(p => (
+                <button key={p.id} onClick={() => setPagamento(p.id)} style={{
+                  padding: '6px 4px', borderRadius: 8, border: `2px solid ${pagamento === p.id ? '#3b82f6' : '#e2e8f0'}`,
+                  background: pagamento === p.id ? '#eff6ff' : '#fff', cursor: 'pointer',
+                  fontSize: 11, fontWeight: 600, color: pagamento === p.id ? '#1d4ed8' : '#374151', textAlign: 'center'
+                }}>
+                  <div style={{ fontSize: 16 }}>{p.icon}</div>
+                  <div style={{ fontSize: 10 }}>{p.label}</div>
                 </button>
               ))}
             </div>
-            <div style={{ display: 'grid', gap: '8px' }}>
-              <button onClick={() => completaVendita('scontrino')} disabled={loading}
-                style={{ background: '#22c55e', color: 'white', border: 'none', borderRadius: '10px', padding: '14px', fontWeight: '800', cursor: 'pointer', fontSize: '16px' }}>
-                🧾 Emetti Scontrino
-              </button>
-              <button onClick={() => completaVendita('fattura')} disabled={loading}
-                style={{ background: '#3b82f6', color: 'white', border: 'none', borderRadius: '8px', padding: '12px', fontWeight: '700', cursor: 'pointer' }}>
-                📄 Emetti Fattura
-              </button>
-              <button onClick={() => setShowPaga(false)} style={{ background: '#f1f5f9', color: '#374151', border: 'none', borderRadius: '8px', padding: '10px', fontWeight: '600', cursor: 'pointer' }}>Annulla</button>
+          </div>
+
+          {/* Contanti: calcola resto */}
+          {pagamento === 'contanti' && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, background: '#fff', borderRadius: 8, padding: '8px 12px', border: '1px solid #e2e8f0' }}>
+              <span style={{ fontSize: 13, color: '#64748b' }}>Contanti dati: €</span>
+              <input type="number" value={contantiDati || ''} onChange={e => setContantiDati(Number(e.target.value))}
+                style={{ flex: 1, padding: '4px 8px', borderRadius: 6, border: '1px solid #e2e8f0', fontSize: 14, fontWeight: 700 }} />
+              {contantiDati > 0 && <span style={{ fontSize: 14, fontWeight: 700, color: '#059669' }}>Resto: €{resto.toFixed(2)}</span>}
+            </div>
+          )}
+
+          {/* Note */}
+          <button onClick={() => setShowNota(!showNota)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#64748b', fontSize: 13, marginBottom: 8, padding: 0 }}>
+            {showNota ? '▼' : '▶'} Note vendita
+          </button>
+          {showNota && <textarea value={note} onChange={e => setNote(e.target.value)} placeholder="Note..." rows={2}
+            style={{ width: '100%', borderRadius: 8, border: '1px solid #e2e8f0', padding: '8px 10px', fontSize: 13, resize: 'none', marginBottom: 8, boxSizing: 'border-box' }} />}
+
+          {error && <div style={{ background: '#fee2e2', color: '#dc2626', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 8 }}>{error}</div>}
+
+          <button onClick={completaVendita} disabled={loading || carrello.length === 0} style={{
+            width: '100%', padding: '14px', borderRadius: 10, border: 'none',
+            background: carrello.length === 0 ? '#e2e8f0' : '#10b981',
+            color: carrello.length === 0 ? '#94a3b8' : '#fff',
+            fontWeight: 800, fontSize: 16, cursor: carrello.length === 0 ? 'not-allowed' : 'pointer',
+            transition: 'all 0.2s'
+          }}>
+            {loading ? '⏳ Elaborazione...' : `✅ INCASSA €${totaleDovuto.toFixed(2)}`}
+          </button>
+        </div>
+      </div>
+
+      {/* MODAL CERCA CLIENTE */}
+      {showCercaCliente && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div style={{ background: '#fff', borderRadius: 16, padding: 24, width: 480, maxHeight: '70vh', display: 'flex', flexDirection: 'column' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+              <h3 style={{ margin: 0, fontWeight: 800 }}>Seleziona Cliente</h3>
+              <button onClick={() => setShowCercaCliente(false)} style={{ background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: '#64748b' }}>✕</button>
+            </div>
+            <input value={cercaCliente} onChange={e => setCercaCliente(e.target.value)} placeholder="🔍 Cerca per nome o codice..."
+              style={{ padding: '10px 14px', borderRadius: 8, border: '1px solid #e2e8f0', fontSize: 14, marginBottom: 12, outline: 'none' }} autoFocus />
+            <div style={{ overflowY: 'auto', flex: 1 }}>
+              {clientiFiltrati.slice(0, 30).map(c => (
+                <button key={c.id} onClick={() => { setClienteSelezionato(c); setShowCercaCliente(false); setCercaCliente('') }}
+                  style={{ width: '100%', padding: '12px 16px', background: '#f8fafc', border: 'none', borderRadius: 8, cursor: 'pointer', textAlign: 'left', marginBottom: 6, transition: 'background 0.15s' }}
+                  onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = '#eff6ff'}
+                  onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = '#f8fafc'}>
+                  <div style={{ fontWeight: 700, color: '#1e293b' }}>{c.nome}</div>
+                  <div style={{ fontSize: 12, color: '#64748b' }}>{c.codice && `Cod: ${c.codice} · `}{c.citta || ''}{c.sconto > 0 ? ` · Sconto: ${c.sconto}%` : ''}</div>
+                </button>
+              ))}
+              {clientiFiltrati.length === 0 && <div style={{ textAlign: 'center', padding: 30, color: '#94a3b8' }}>Nessun cliente trovato</div>}
             </div>
           </div>
         </div>
